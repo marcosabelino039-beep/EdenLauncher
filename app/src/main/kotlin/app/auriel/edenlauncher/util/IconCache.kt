@@ -4,13 +4,14 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.LauncherActivityInfo
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.UserHandle
 import android.util.LruCache
 import app.auriel.edenlauncher.icons.CustomIcons
 import app.auriel.edenlauncher.icons.IconPack
+import app.auriel.edenlauncher.icons.IconShape
+import app.auriel.edenlauncher.icons.IconShaper
 import app.auriel.edenlauncher.settings.LauncherPrefs
 
 /**
@@ -71,13 +72,23 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
     private var hasCustomIcons = false
 
     /**
+     * The outline icons are cut to, or [IconShape.SYSTEM] to cut none.
+     *
+     * Separate from the pack because it is a separate decision. A pack supplies artwork; a shape
+     * decides what silhouette that artwork ends up in, and it is applied last so the two compose
+     * instead of competing. See [IconShaper].
+     */
+    @Volatile
+    private var iconShape: IconShape = IconShape.SYSTEM
+
+    /**
      * True when anything at all would change an app's own icon.
      *
      * The launcher checks this before starting the second pass, so a user with no pack and no
      * custom icons - the overwhelmingly common case - pays nothing for the machinery at all.
      */
     val hasThemedSource: Boolean
-        get() = iconPack != null || hasCustomIcons
+        get() = iconPack != null || hasCustomIcons || iconShape.isOverride
 
     /**
      * Re-reads which pack and which overrides are in force, clearing anything cached under the old
@@ -104,6 +115,14 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
         val custom = !simple && CustomIcons.hasAny(context)
         if (custom != hasCustomIcons) themedCache.evictAll()
         hasCustomIcons = custom
+
+        // Icon shapes arrived in v0.6.0, so Simple mode - which is v0.2.0 - does not cut any.
+        val shape = if (simple) IconShape.SYSTEM else prefs.iconShape
+        if (shape != iconShape) {
+            iconShape = shape
+            themedCache.evictAll()
+            EdenLog.i(TAG, "icon shape is now $shape")
+        }
     }
 
     /**
@@ -155,28 +174,44 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
 
     private fun resolveThemed(key: Key, activity: LauncherActivityInfo): Bitmap? {
         val component = activity.componentName
+        val shape = iconShape
 
         if (hasCustomIcons) {
             CustomIcons.iconFor(context, component)?.let { custom ->
-                return if (custom.width == iconSizePx && custom.height == iconSizePx) {
-                    custom
-                } else {
-                    Bitmap.createScaledBitmap(custom, iconSizePx, iconSizePx, true)
-                        .also { if (it !== custom) custom.recycle() }
+                val shaped = IconShaper.shape(custom, shape, iconSizePx)
+                if (shaped !== custom) custom.recycle()
+                return shaped
+            }
+        }
+
+        val pack = iconPack
+        if (pack != null) {
+            pack.drawableFor(component)?.let { return IconShaper.shape(it, shape, iconSizePx) }
+
+            // An app the pack has no entry for still gets its background, mask, and overlay, which
+            // is what stops a themed home screen looking half finished. The app's own icon is taken
+            // from the base cache rather than asked of the package manager a second time - it was
+            // decoded moments ago by the first pass, at exactly the size the composition wants.
+            if (pack.canCompose()) {
+                val base = baseIcon(key, activity)
+                pack.compose(BitmapDrawable(context.resources, base), iconSizePx)?.let {
+                    return IconShaper.shape(it, shape, iconSizePx)
                 }
             }
         }
 
-        val pack = iconPack ?: return null
-        pack.drawableFor(component)?.let { return rasterise(it) }
-
-        // An app the pack has no entry for still gets its background, mask, and overlay, which is
-        // what stops a themed home screen looking half finished. The app's own icon is taken from
-        // the base cache rather than asked of the package manager a second time - it was decoded
-        // moments ago by the first pass, at exactly the size the composition wants.
-        if (pack.canCompose()) {
-            val base = baseIcon(key, activity)
-            return pack.compose(BitmapDrawable(context.resources, base), iconSizePx)
+        // No pack has anything to say about this app, but a shape still has to be cut out of it.
+        //
+        // The drawable is asked for a second time rather than reusing the bitmap the first pass
+        // left in the base cache, and that is deliberate. An adaptive icon rasterised by the first
+        // pass has already had the device's own mask applied to it, and a squircle recovered from
+        // a circle is a circle. Going back to the drawable is what lets [IconShaper] draw the two
+        // layers into the chosen outline instead, which is the whole point of adaptive icons.
+        // It costs one package-manager call per app, on the second pass, once.
+        if (shape.isOverride) {
+            return runCatching { IconShaper.shape(activity.getIcon(iconDensity), shape, iconSizePx) }
+                .onFailure { EdenLog.w(TAG, "Could not shape the icon for $component", it) }
+                .getOrNull()
         }
         return null
     }
@@ -202,22 +237,8 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
         }
     }
 
-    /** Draws [drawable] into a square bitmap of the grid's icon size. */
-    private fun rasterise(drawable: Drawable): Bitmap {
-        // A bitmap-backed drawable already at the right size needs no redraw.
-        if (drawable is BitmapDrawable) {
-            val source = drawable.bitmap
-            if (source != null && source.width == iconSizePx && source.height == iconSizePx) {
-                return source
-            }
-        }
-
-        val bitmap = Bitmap.createBitmap(iconSizePx, iconSizePx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        drawable.setBounds(0, 0, iconSizePx, iconSizePx)
-        drawable.draw(canvas)
-        return bitmap
-    }
+    /** Draws [drawable] into a square bitmap of the grid's icon size, cutting no shape. */
+    private fun rasterise(drawable: Drawable): Bitmap = IconShaper.rasterise(drawable, iconSizePx)
 
     private companion object {
         const val TAG = "IconCache"

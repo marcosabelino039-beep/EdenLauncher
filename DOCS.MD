@@ -73,6 +73,36 @@ There is no state machine yet, deliberately. Each overlay knows how to open and 
 overview, else close the drawer, else close a folder, else go to the home page. When the next state
 appears, that is the moment to build one.
 
+## Reordering pages
+
+`Workspace.reorderScreen` has existed since Phase 1 and had no caller until now; the gesture is the
+new part.
+
+A card in overview is not an ordinary view. `CellLayout.onInterceptTouchEvent` returns true so the
+icons on it stop taking clicks, and `onTouchEvent` swallows everything and acts on the up - which
+means `View`'s own long-press timer never runs, because that is driven from the `onTouchEvent` this
+never calls up to. So the hold is timed by hand there, and cancelled by any movement past the slop:
+sideways movement is paging, and `PagedView` above has already had its chance to claim it.
+
+When the hold fires, `Workspace.onInterceptTouchEvent` starts returning true. The card gets a
+cancel and the rest of the gesture arrives at the workspace, which is the only place that can move
+a page relative to its siblings.
+
+The carried card is positioned by `translationX` off whatever slot it currently occupies, so both
+the finger's travel and the workspace's scroll have to be added back in - scroll included, or the
+card would slide away with the pages it is being carried past. When its centre becomes nearest a
+different slot, `reorderScreen` runs with `persist = false`, and the translation is corrected by the
+difference between the two slots' resting scrolls so the card does not jump a page's width away
+from the finger holding it. The pages it displaced are given the translation they just lost and
+animated to zero, so they slide rather than appear.
+
+Overview shows one card and slivers of its neighbours, so without an edge scroll a page could only
+ever move one slot per gesture - the finger would run out of screen first. The edge zone is 16% of
+the viewport and the speed rises with how far into it the finger is.
+
+The order is written once, on the up, and only when something actually changed. A hold and release
+stores nothing.
+
 ## Long press does two things
 
 A long press on an icon has to mean both "show me the options" and "pick this up", and neither can
@@ -242,6 +272,41 @@ Three sources, most specific first:
 That order is deliberate. Choosing an icon for one app is a more specific instruction than choosing
 a pack for all of them, so switching packs must not silently undo it.
 
+A fourth thing then happens to whatever those three produced: it is cut to the user's chosen shape.
+
+### Shapes
+
+`icons/IconShape` is twelve outlines plus `SYSTEM`, which is the default and means "cut nothing".
+Each writes itself into a `Path` filling a square. `icons/IconShaper` applies one.
+
+The shape is the *last* step, never a competing one. A pack decides what an app's icon looks like;
+a shape decides what shape it comes out. Both apply, in that order, which is what lets someone keep
+a pack they like and still have hexagons.
+
+Three treatments, picked by looking at what arrived:
+
+| Artwork | Treatment | Why |
+|---------|-----------|-----|
+| An adaptive icon | Its two layers are drawn straight into the outline | Adaptive icons exist to be masked to an arbitrary shape. This is the only case where the result is exactly what the icon's author intended. |
+| Anything that fills its box - a pack's icon, a composition, most legacy icons | Scaled to cover, then clipped | Whatever falls outside is lost. That is the honest cost of asking for a circle when the author drew a square. |
+| A glyph floating on transparency | A plate in the shape, tinted from the artwork's own dominant hue, with the glyph set into it | Clipping a small mark in the middle of an empty square to a circle produces the mark and no visible shape at all. |
+
+Two details that are not obvious and are load-bearing:
+
+- **The drawable is fetched a second time.** `IconCache.resolveThemed` asks `LauncherActivityInfo`
+  for the icon again rather than reusing the bitmap the first pass cached. It has to: an adaptive
+  icon rasterised by the first pass has already had *the device's* mask applied, and a squircle
+  recovered from a circle is a circle. One package-manager call per app, on the second pass, once.
+- **Masked with `DST_IN`, not `clipPath`.** A clip path on a software canvas has no antialiasing,
+  and a circle with a staircase for an edge is worse than no shape. The output bitmap is its own
+  layer, so no `saveLayer` is needed.
+
+Shapes ride the second pass (below) rather than the load, so a cold start costs nothing for them
+and they arrive in waves like a pack does. `hasThemedSource` is what gates that, and it now counts
+a shape as a source. Simple mode cuts no shapes - it is v0.2.0, which had none. `FolderIcon` reads
+the shape too: a home screen of circles with rounded-rectangle folders on it reads as an oversight
+rather than a choice.
+
 ### Two passes
 
 Sources 1 and 2 are resolved *after* the home screen is on screen, not during the load.
@@ -386,8 +451,7 @@ dependency retired in January 2025. A second backend can be added behind the int
 |---------|-----|
 | Work-profile widgets | Binding one goes through a different call; it belongs with proper multi-profile support rather than smuggled into the picker. |
 | Search in the widget picker | Fine at sixty widgets, not at three hundred. |
-| Icon shapes | Packs supply their own masks; a launcher-wide shape override on top of that is a fight between two opinions and needs a design first. |
-| Page reorder by dragging cards | Overview manages pages by badge; dragging cards to reorder is not wired yet. |
+| Notification dots | The AOSP 7 to 8 feature still to be mined. Nothing is built for it. |
 | Overview zoom and free-scroll in `PagedView` | AOSP's oversized 2x measurement existed to support them; dropping both made measurement simpler and cheaper. |
 | Icon disk cache, app prediction, Quickstep | Later phases, or never. |
 

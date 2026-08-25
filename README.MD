@@ -20,6 +20,9 @@ Eden gives that back. Every one of those is a setting, and the defaults are only
 - **Pick your home page.** Keep the middle one as home and have pages either side of it. Tap the
   little house on any card in overview. Stock Android has never let you do this without replacing
   the whole launcher; here it is one tap.
+- **Reorder your pages by dragging them.** Hold any card in overview and carry it left or right;
+  the others move aside as it passes and the workspace scrolls when you reach the edge, so a page
+  can travel further than one slot in a single go.
 - **An app drawer that works your way** - fling vertically through one continuous grid, or swipe
   through fixed pages. Same apps, same search, your choice of gesture. Set the background anywhere
   from fully opaque to fully transparent so your wallpaper shows through.
@@ -49,12 +52,20 @@ Eden gives that back. Every one of those is a setting, and the defaults are only
   wait on a blank screen while a few hundred icons are composed.
 - **Any icon, for any app.** Long-press and pick from the whole pack in a searchable grid, or hand
   it a picture. A chosen icon outranks the pack, so switching packs never silently undoes it.
+- **Twelve icon shapes**, cut over the top of whatever your icons already are - circle, square,
+  rounded square, squircle, Apple, teardrop, leaf, diamond, hexagon, rounded hexagon, octagon and
+  a seven-sided cookie. This is applied *on top of* your icon pack rather than instead of it: the
+  pack still decides what every icon looks like, the shape only decides what shape it comes out.
+  Adaptive icons are redrawn from their own layers rather than re-cut from the system's mask, so a
+  square really is square all the way into its corners. Folders follow the shape too.
 - **Rename anything**, on the home screen or in the drawer, and clear the field to get the app's own
   name back. Search still matches the original, so a rename can never hide an app from you.
 - **A drawer that keeps up.** Install, update, or uninstall an app and the launcher notices, without
   waiting to be killed and restarted.
 - **Its own settings screen**, because a launcher lifted out of AOSP has no host app to hang
   preferences off, and no two OEM Settings apps agree on where they should live.
+- **An About screen** that says what you are running and who wrote it, with a link straight to the
+  source.
 - **A log you can read on the device.** The last 48 hours of what Eden did, kept locally, thrown
   away after that, and shared only if you press Share.
 - **Widgets, hosted properly.** Every widget your phone provides, grouped by app, each one labelled
@@ -70,7 +81,7 @@ Eden gives that back. Every one of those is a setting, and the defaults are only
 - **Nothing is destroyed on one tap.** Deleting a page says how many things are on it and waits for
   an answer; an empty page still goes without ceremony.
 
-Coming next: icon shapes, then notification dots.
+Coming next: notification dots.
 
 ---
 
@@ -79,6 +90,11 @@ Coming next: icon shapes, then notification dots.
 Every shot below is Eden 0.4.0 running on a Galaxy M31 (Android 16), captured off the device. The
 icons are themed by an icon pack the phone already had installed - nothing here is a mockup, and
 nothing was retouched.
+
+> **These screenshots are out of date.** They are from 0.4.0 and Eden is now on 0.6.0. Two releases
+> of features are missing from them - widgets, simple mode, folders you can take apps back out of,
+> icon shapes, page reordering - and the launcher is a good deal more stable than the one pictured.
+> Nothing shown here has been removed; there is simply more of it now. New shots are on the list.
 
 ### Home screen
 
@@ -204,9 +220,10 @@ Share.</sub></td>
 | **3** | Live wallpaper - GL engine, eleven bundled wallpapers, video wallpapers, still-frame picker | **Done** |
 | **4** | Icons - icon packs, per-app icons, wallpaper cropping, live app list, on-device log | **Done** |
 | **5** | Widgets - `AppWidgetHost`, the bind flow, the picker, resize frames - plus simple mode | **Done** |
-| 6 | Icon shapes, notification dots, page reorder by dragging cards | Next |
+| **6** | Icon shapes, page reorder by dragging cards, the About screen | **Done** |
+| 7 | Notification dots | Next |
 
-Running on a Galaxy M31 (Android 16, API 36). Release APK is about 830 KB, with no native code.
+Running on a Galaxy M31 (Android 16, API 36). Release APK is about 872 KB, with no native code.
 
 ---
 

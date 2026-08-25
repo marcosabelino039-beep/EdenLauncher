@@ -155,8 +155,12 @@ class Workspace @JvmOverloads constructor(
     /**
      * Moves the page at [from] to [to]. Both the child order and the id list move together, so
      * page ids keep pointing at the same content.
+     *
+     * @param persist whether to write the new order out. A drag crosses several slots on its way
+     *   somewhere and only the last one is the answer, so the gesture passes false and stores the
+     *   order once, when the finger comes up.
      */
-    fun reorderScreen(from: Int, to: Int): Boolean {
+    fun reorderScreen(from: Int, to: Int, persist: Boolean = true): Boolean {
         if (from == to) return false
         if (from !in screenOrder.indices || to !in screenOrder.indices) return false
 
@@ -165,7 +169,7 @@ class Workspace @JvmOverloads constructor(
         addView(page, to)
         screenOrder.add(to, screenOrder.removeAt(from))
 
-        placementHandler?.onScreenOrderChanged(screenIds)
+        if (persist) placementHandler?.onScreenOrderChanged(screenIds)
         return true
     }
 
@@ -504,6 +508,9 @@ class Workspace @JvmOverloads constructor(
     fun exitOverview() {
         if (!isInOverview) return
         isInOverview = false
+        // Zooming back in while a card is still being carried would leave it lifted and offset on
+        // a home screen that has no cards on it.
+        endPageDrag()
         allowOverScroll = true
         animateOverview(0f)
         onOverviewChanged?.invoke(false)
@@ -570,6 +577,9 @@ class Workspace @JvmOverloads constructor(
             page.onHomeBadgeTap = { onOverviewSetHome?.invoke(screenId) }
             page.onRemoveBadgeTap = { onOverviewRemovePage?.invoke(screenId) }
             page.onPageTap = { onOverviewPageSelected?.invoke(indexOfChild(page)) }
+            // Looked up at the moment of the press rather than captured: by then the page may have
+            // been dragged somewhere else in the order already.
+            page.onCardLongPress = { beginPageDrag(page) }
         }
     }
 
@@ -582,18 +592,225 @@ class Workspace @JvmOverloads constructor(
         }
     }
 
+    // ---- reordering pages by dragging their cards --------------------------------------------------
+
+    /**
+     * Index of the card being carried, or -1.
+     *
+     * The index rather than the view, because it is also the answer to "where in the order is it
+     * now", which is the thing the drag is changing. It is kept in step with the child list every
+     * time the order moves under it.
+     */
+    private var pageDragIndex = -1
+
+    /** Whether the order actually changed, so a hold and release writes nothing. */
+    private var pageDragMoved = false
+
+    /** Where the finger and the scroll were when the carry began. NaN until the first move. */
+    private var pageDragStartX = Float.NaN
+    private var pageDragStartScroll = 0
+    private var pageDragTranslation = 0f
+    private var pageDragPointerX = 0f
+    private var pageDragEdgeStep = 0
+
+    private val density = resources.displayMetrics.density
+
+    /**
+     * Picks a card up.
+     *
+     * Refused with one page: there is no order to change, and lifting the only card would say
+     * there was. Refused mid-drag too, since a second finger landing on a neighbouring card would
+     * otherwise take over the carry.
+     */
+    private fun beginPageDrag(page: CellLayout) {
+        if (!isInOverview || pageDragIndex >= 0 || childCount <= 1) return
+        val index = indexOfChild(page)
+        if (index < 0) return
+
+        pageDragIndex = index
+        pageDragMoved = false
+        pageDragStartX = Float.NaN
+        pageDragTranslation = 0f
+        pageDragEdgeStep = 0
+
+        page.isLifted = true
+        // Drawn above its neighbours while it travels over them.
+        page.translationZ = CARRIED_ELEVATION_DP * density
+        performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        postOnAnimation(pageDragEdgeScroll)
+    }
+
+    /**
+     * Keeps the carried card under the finger and the rest of the order out of its way.
+     *
+     * Two things move it: the finger, and the workspace scrolling underneath it at the edges. The
+     * card is positioned by translation off whatever slot it currently occupies, so both have to be
+     * added back in - scroll included, or the card would slide away with the pages it is being
+     * carried past.
+     */
+    private fun updatePageDrag() {
+        val card = getChildAt(pageDragIndex) as? CellLayout ?: return endPageDrag()
+        if (pageDragStartX.isNaN()) return
+
+        pageDragTranslation =
+            (pageDragPointerX - pageDragStartX) + (scrollX - pageDragStartScroll).toFloat()
+        card.translationX = pageDragTranslation
+        settleOrderAround(card)
+    }
+
+    /**
+     * Moves the rest of the pages aside when the carried one has travelled into their slot.
+     *
+     * The slot is decided by which resting position the card is nearest, not by how far it has
+     * come, so a slow drag and a fast one across the same distance land in the same place.
+     */
+    private fun settleOrderAround(card: CellLayout) {
+        val carriedAt = getScrollForPage(pageDragIndex) + pageDragTranslation
+
+        var target = pageDragIndex
+        var nearest = Float.MAX_VALUE
+        for (i in 0 until childCount) {
+            val distance = kotlin.math.abs(carriedAt - getScrollForPage(i))
+            if (distance < nearest) {
+                nearest = distance
+                target = i
+            }
+        }
+        if (target == pageDragIndex) return
+
+        // Where every page sits right now, so the ones the reorder displaces can slide from here
+        // to their new slot instead of appearing in it.
+        val restingAt = HashMap<View, Int>(childCount)
+        for (i in 0 until childCount) restingAt[getChildAt(i)] = getScrollForPage(i)
+
+        val from = pageDragIndex
+        if (!reorderScreen(from, target, persist = false)) return
+        pageDragIndex = target
+        pageDragMoved = true
+
+        // The card's own slot moved under it. Take that back out of the translation, or it would
+        // jump a page's width away from the finger holding it.
+        pageDragTranslation -= (getScrollForPage(target) - getScrollForPage(from)).toFloat()
+        card.translationX = pageDragTranslation
+
+        for (i in 0 until childCount) {
+            val child = getChildAt(i)
+            if (child === card) continue
+            val before = restingAt[child] ?: continue
+            val delta = (before - getScrollForPage(i)).toFloat()
+            if (delta == 0f) continue
+            child.translationX = delta
+            child.animate().translationX(0f).setDuration(REORDER_SLIDE_MS).start()
+        }
+    }
+
+    /**
+     * Scrolls the workspace when the card is carried to the edge of the screen.
+     *
+     * Overview shows one card and the slivers of its neighbours, so without this a page could only
+     * ever be moved one slot per gesture - the finger would run out of screen before the card
+     * reached the next position. Speed rises with how far into the edge the finger is, so easing
+     * into the zone nudges and pinning to the edge travels.
+     */
+    private val pageDragEdgeScroll = object : Runnable {
+        override fun run() {
+            if (pageDragIndex < 0) return
+            if (pageDragEdgeStep != 0) {
+                val before = scrollX
+                scrollTo(scrollX + pageDragEdgeStep, scrollY)
+                if (scrollX != before) updatePageDrag()
+            }
+            postOnAnimation(this)
+        }
+    }
+
+    private fun updateEdgeScroll(x: Float) {
+        val zone = viewportWidth * EDGE_ZONE
+        if (zone <= 0f) {
+            pageDragEdgeStep = 0
+            return
+        }
+        pageDragEdgeStep = when {
+            x < zone -> -edgeStep(1f - x / zone)
+            x > viewportWidth - zone -> edgeStep(1f - (viewportWidth - x) / zone)
+            else -> 0
+        }
+    }
+
+    private fun edgeStep(intensity: Float): Int =
+        (EDGE_SCROLL_DP * density * intensity.coerceIn(0f, 1f)).toInt().coerceAtLeast(1)
+
+    /** Puts the card down, snaps to wherever it ended up, and stores the order if it changed. */
+    private fun endPageDrag() {
+        val index = pageDragIndex
+        if (index < 0) return
+
+        pageDragIndex = -1
+        pageDragEdgeStep = 0
+        removeCallbacks(pageDragEdgeScroll)
+
+        (getChildAt(index) as? CellLayout)?.let { card ->
+            card.isLifted = false
+            card.animate()
+                .translationX(0f)
+                .setDuration(REORDER_SLIDE_MS)
+                .withEndAction { card.translationZ = 0f }
+                .start()
+        }
+        pageDragTranslation = 0f
+        pageDragStartX = Float.NaN
+
+        snapToPage(index)
+        // The badges are wired per index, and the indices have just moved.
+        bindOverviewCallbacks()
+
+        if (pageDragMoved) {
+            pageDragMoved = false
+            placementHandler?.onScreenOrderChanged(screenIds)
+            EdenLog.i(TAG, "page order is now $screenIds")
+        }
+    }
+
     private var downX = 0f
     private var downY = 0f
     private var swipeConsumed = false
     private val swipeThresholdPx = SWIPE_THRESHOLD_DP * resources.displayMetrics.density
 
+    /**
+     * Takes the gesture off the card once the hold has fired.
+     *
+     * The press started on a [CellLayout], which is where the hold was timed, so the events are
+     * going to the child. Claiming them here sends it a cancel and routes the rest of the drag to
+     * [onTouchEvent], which is the only place that can move a page relative to its siblings.
+     */
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (pageDragIndex >= 0) return true
         if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
             downX = ev.x
             downY = ev.y
             swipeConsumed = false
         }
         return super.onInterceptTouchEvent(ev)
+    }
+
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (pageDragIndex < 0) return super.onTouchEvent(ev)
+
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                pageDragPointerX = ev.x
+                if (pageDragStartX.isNaN()) {
+                    // Sampled together, because the translation is measured from both.
+                    pageDragStartX = ev.x
+                    pageDragStartScroll = scrollX
+                }
+                updateEdgeScroll(ev.x)
+                updatePageDrag()
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endPageDrag()
+        }
+        return true
     }
 
     /**
@@ -642,6 +859,18 @@ class Workspace @JvmOverloads constructor(
 
         /** How much more vertical than horizontal the flick must be. */
         private const val VERTICAL_BIAS = 1.5f
+
+        /** How far a carried card is raised above the ones it is being moved past. */
+        private const val CARRIED_ELEVATION_DP = 8f
+
+        /** How long a displaced page takes to slide into its new slot. */
+        private const val REORDER_SLIDE_MS = 180L
+
+        /** Fraction of the screen at each edge that scrolls the workspace during a page drag. */
+        private const val EDGE_ZONE = 0.16f
+
+        /** Top speed of that scroll, in dp per frame. */
+        private const val EDGE_SCROLL_DP = 14f
 
         /** The model object a workspace child stands for, if any. */
         fun viewInfo(view: View?): ItemInfo? = when (view) {
