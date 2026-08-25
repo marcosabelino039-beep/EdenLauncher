@@ -4,6 +4,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.BitmapDrawable
@@ -15,8 +18,10 @@ import android.widget.TextView
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.device.DeviceProfile
+import app.auriel.edenlauncher.icons.IconShape
 import app.auriel.edenlauncher.model.FolderInfo
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.settings.LauncherPrefs
 
 /**
  * The closed-folder icon: a rounded tile showing up to four of the folder's app icons.
@@ -41,6 +46,20 @@ class FolderIcon @JvmOverloads constructor(
     private val previewBounds = RectF()
     private val srcRect = Rect()
     private val dstRect = Rect()
+
+    /**
+     * The outline the user chose for app icons, which a folder tile has to follow too.
+     *
+     * A home screen of circles with square folders on it does not read as a choice, it reads as
+     * something that was missed. Read once per view: a change to it reloads the launcher, which
+     * builds these again.
+     */
+    private val shape: IconShape = LauncherPrefs(context).iconShape
+
+    private val shapePath = Path()
+    private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+    }
 
     init {
         gravity = Gravity.CENTER_HORIZONTAL
@@ -73,9 +92,14 @@ class FolderIcon @JvmOverloads constructor(
         val bitmap = Bitmap.createBitmap(previewSize, previewSize, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        val radius = previewSize * BACKGROUND_RADIUS_RATIO
         previewBounds.set(0f, 0f, previewSize.toFloat(), previewSize.toFloat())
-        canvas.drawRoundRect(previewBounds, radius, radius, backgroundPaint)
+        if (shape.isOverride) {
+            shape.outline(previewSize.toFloat(), shapePath)
+            canvas.drawPath(shapePath, backgroundPaint)
+        } else {
+            val radius = previewSize * BACKGROUND_RADIUS_RATIO
+            canvas.drawRoundRect(previewBounds, radius, radius, backgroundPaint)
+        }
 
         // Two-by-two grid of the first four icons, inset so the tile edge stays visible.
         val inset = (previewSize * PREVIEW_INSET_RATIO).toInt()
@@ -92,6 +116,12 @@ class FolderIcon @JvmOverloads constructor(
             dstRect.set(left, top, left + cell, top + cell)
             canvas.drawBitmap(icon, srcRect, dstRect, iconPaint)
         }
+
+        // The four previews are inset, but a hexagon or a teardrop takes far more off a corner
+        // than a rounded rectangle does, so the tile is cut to the outline afterwards rather than
+        // trusted to fit inside it. Masked with DST_IN for the same reason IconShaper does: a clip
+        // path on a software canvas has no antialiasing.
+        if (shape.isOverride) canvas.drawPath(shapePath, maskPaint)
 
         val drawable = BitmapDrawable(resources, bitmap)
         drawable.setBounds(0, 0, previewSize, previewSize)

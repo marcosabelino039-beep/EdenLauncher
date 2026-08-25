@@ -1830,9 +1830,11 @@ class Launcher : Activity(), ItemPlacementHandler {
 
         // A changed icon pack needs a reload, not a recreate: the views are all still the right
         // shape, they are only holding the wrong bitmaps. Simple mode rides along in the same
-        // signature because turning it on stops packs and custom icons being consulted, which is
-        // the same kind of change.
+        // signature because turning it on stops packs, custom icons and shapes being consulted,
+        // which is the same kind of change. So does the icon shape, for the same reason: the grid
+        // is unchanged and only the bitmaps in it are wrong.
         val icons = appState.preferences.iconPackPackage.orEmpty() +
+            "|" + appState.preferences.iconShape.name +
             if (appState.preferences.simpleMode) "|simple" else ""
         if (iconSignature == null) {
             iconSignature = icons

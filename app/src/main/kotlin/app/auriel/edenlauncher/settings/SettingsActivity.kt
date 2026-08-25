@@ -1,6 +1,13 @@
 package app.auriel.edenlauncher.settings
 
 import android.app.Activity
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.drawable.AdaptiveIconDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -14,6 +21,7 @@ import android.widget.TextView
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.icons.IconPacks
+import app.auriel.edenlauncher.icons.IconShape
 
 /**
  * Launcher settings.
@@ -116,6 +124,10 @@ class SettingsActivity : Activity() {
             column.addView(label(getString(R.string.settings_icon_pack)), spacedParams(spacing))
             column.addView(iconPackChooser())
             column.addView(summary(getString(R.string.settings_icon_pack_summary)))
+
+            column.addView(label(getString(R.string.settings_icon_shape)), spacedParams(spacing * 2))
+            column.addView(iconShapeChooser())
+            column.addView(summary(getString(R.string.settings_icon_shape_summary)))
         }
 
         column.addView(label(getString(R.string.settings_icon_size)), spacedParams(spacing))
@@ -565,6 +577,189 @@ class SettingsActivity : Activity() {
             }
         }
         return spinner
+    }
+
+    // ---- icon shapes -----------------------------------------------------------------------------
+
+    /**
+     * A dropdown of every shape, each row drawn as well as named.
+     *
+     * The same control as the icon pack above it, for the same reason: this is a value with a
+     * current state, not an action, so the closed control should show what is in use. A row of
+     * swatches was tried first and it reads better while you are looking at it - but there are
+     * thirteen of them, which is three screens of sideways scrolling on a phone, and a control
+     * where half the options are off the edge and give no sign they exist is worse than one that
+     * opens into a list.
+     *
+     * The swatch is kept, inside each row. Nobody knows what a squircle looks like next to a
+     * rounded square from the names alone, and a dropdown of thirteen words would be asking them
+     * to pick one and find out.
+     *
+     * Ordered by the label the user actually reads rather than by the order the shapes happen to
+     * be written down in, so the list stays alphabetical whatever gets added to [IconShape] later.
+     * System leads it rather than sorting into the middle, the same way "None" leads the pack
+     * list: it is not a shape, it is the way back from having picked one, and somebody who has
+     * just made every icon on their phone a diamond should not have to hunt for the undo.
+     */
+    private fun iconShapeChooser(): View {
+        val ordered = ArrayList<IconShape>(IconShape.entries.size)
+        ordered.add(IconShape.SYSTEM)
+        IconShape.entries
+            .filter { it != IconShape.SYSTEM }
+            .sortedBy { getString(shapeLabel(it)) }
+            .let(ordered::addAll)
+
+        return android.widget.Spinner(this).apply {
+            adapter = ShapeAdapter(this@SettingsActivity, ordered)
+            setBackgroundResource(R.drawable.settings_spinner_background)
+            setSelection(ordered.indexOf(prefs.iconShape).coerceAtLeast(0))
+
+            // Set after the initial selection, so restoring the current value is not itself treated
+            // as a change and does not clear the icon cache on every visit.
+            post {
+                onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                    override fun onItemSelected(
+                        parent: android.widget.AdapterView<*>?,
+                        view: View?,
+                        position: Int,
+                        id: Long,
+                    ) {
+                        applyIconShape(ordered[position])
+                    }
+
+                    override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                }
+            }
+        }
+    }
+
+    /** One row of the shape dropdown: the shape itself, then its name. */
+    private class ShapeAdapter(
+        private val activity: SettingsActivity,
+        shapes: List<IconShape>,
+    ) : android.widget.ArrayAdapter<IconShape>(activity, 0, shapes) {
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+            row(position)
+
+        override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
+            row(position)
+
+        /**
+         * Built fresh rather than recycled. The list is thirteen rows long and is inflated once
+         * when the dropdown opens - recycling here would save nothing and cost the bug where a row
+         * shows the shape belonging to the one it replaced.
+         */
+        private fun row(position: Int): View {
+            val shape = getItem(position) ?: IconShape.SYSTEM
+            val size = activity.resources.getDimensionPixelSize(R.dimen.settings_shape_row_swatch)
+            val gap = activity.resources.getDimensionPixelSize(R.dimen.settings_row_spacing)
+
+            val name = TextView(activity).apply {
+                text = activity.getString(activity.shapeLabel(shape))
+                setTextColor(activity.getColor(R.color.settings_text))
+                textSize = SHAPE_ROW_SP
+            }
+
+            return LinearLayout(activity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(gap, gap / 2, gap, gap / 2)
+                contentDescription = name.text
+                addView(
+                    ShapeSwatchView(activity, shape),
+                    LinearLayout.LayoutParams(size, size).apply { rightMargin = gap },
+                )
+                addView(name)
+            }
+        }
+
+        private companion object {
+            const val SHAPE_ROW_SP = 16f
+        }
+    }
+
+    private fun applyIconShape(shape: IconShape) {
+        if (prefs.iconShape == shape) return
+        prefs.iconShape = shape
+        // Every themed icon was cut under the old answer.
+        LauncherAppState.getInstance(this).iconCache.clear()
+        android.widget.Toast
+            .makeText(this, R.string.settings_icon_shape_applied, android.widget.Toast.LENGTH_SHORT)
+            .show()
+    }
+
+    private fun shapeLabel(shape: IconShape): Int = when (shape) {
+        IconShape.SYSTEM -> R.string.icon_shape_system
+        IconShape.CIRCLE -> R.string.icon_shape_circle
+        IconShape.SQUARE -> R.string.icon_shape_square
+        IconShape.ROUNDED_SQUARE -> R.string.icon_shape_rounded_square
+        IconShape.SQUIRCLE -> R.string.icon_shape_squircle
+        IconShape.APPLE -> R.string.icon_shape_apple
+        IconShape.TEARDROP -> R.string.icon_shape_teardrop
+        IconShape.LEAF -> R.string.icon_shape_leaf
+        IconShape.DIAMOND -> R.string.icon_shape_diamond
+        IconShape.HEXAGON -> R.string.icon_shape_hexagon
+        IconShape.ROUNDED_HEXAGON -> R.string.icon_shape_rounded_hexagon
+        IconShape.OCTAGON -> R.string.icon_shape_octagon
+        IconShape.COOKIE -> R.string.icon_shape_cookie
+    }
+
+    /**
+     * One shape, filled, with a ring round it when it is the one in use.
+     *
+     * [IconShape.SYSTEM] has no outline of its own, so it borrows the device's: the mask an
+     * [AdaptiveIconDrawable] would be cut to on this phone. That is a more useful thing to show
+     * than a generic rounded square, because on a Samsung it is a squircle and on a Pixel it is a
+     * circle, and "System" means whichever of those this happens to be.
+     */
+    private class ShapeSwatchView(context: Context, val shape: IconShape) : View(context) {
+
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getColor(R.color.eden_leaf)
+        }
+
+        private val path = Path()
+        private val matrix = Matrix()
+
+        override fun onDraw(canvas: Canvas) {
+            val extent = minOf(width, height).toFloat()
+            if (extent <= 0f) return
+
+            if (shape == IconShape.SYSTEM) systemMask(extent, path) else shape.outline(extent, path)
+
+            // The outline is generated at the origin, so it is moved into place rather than
+            // regenerated at an offset.
+            matrix.setTranslate((width - extent) / 2f, (height - extent) / 2f)
+            path.transform(matrix)
+            canvas.drawPath(path, fillPaint)
+        }
+
+        /** The mask this device cuts adaptive icons to, scaled out of its 100-unit space. */
+        private fun systemMask(extent: Float, into: Path) {
+            val mask = runCatching { AdaptiveIconDrawable(null, null).iconMask }.getOrNull()
+            if (mask == null) {
+                into.reset()
+                into.addRoundRect(
+                    RectF(0f, 0f, extent, extent),
+                    extent * SYSTEM_FALLBACK_RADIUS,
+                    extent * SYSTEM_FALLBACK_RADIUS,
+                    Path.Direction.CW,
+                )
+                return
+            }
+
+            into.set(mask)
+            matrix.setScale(extent / MASK_UNITS, extent / MASK_UNITS)
+            into.transform(matrix)
+        }
+
+        private companion object {
+            const val SYSTEM_FALLBACK_RADIUS = 0.18f
+
+            /** AdaptiveIconDrawable states its mask in a 100 by 100 box. */
+            const val MASK_UNITS = 100f
+        }
     }
 
     private fun applyIconPack(packageName: String?) {

@@ -2,6 +2,7 @@ package app.auriel.edenlauncher.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import app.auriel.edenlauncher.icons.IconShape
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -186,6 +187,20 @@ class LauncherPrefs(context: Context) {
         set(value) = prefs.edit().putString(KEY_ICON_PACK, value).apply()
 
     /**
+     * The outline every app icon is cut to, or [IconShape.SYSTEM] to cut nothing.
+     *
+     * Stored by name so the list can grow without renumbering anybody's choice, and kept separate
+     * from [iconPackPackage] because they answer different questions: the pack decides what the
+     * artwork is, the shape decides what shape it comes out. Both apply, in that order.
+     *
+     * Defaults to the system's own masking, which is the only setting that can be said to be
+     * correct rather than preferred - it is what the icon's author drew for.
+     */
+    var iconShape: IconShape
+        get() = IconShape.fromName(prefs.getString(KEY_ICON_SHAPE, null))
+        set(value) = prefs.edit().putString(KEY_ICON_SHAPE, value.name).apply()
+
+    /**
      * Eden's copy of the picture behind the static wallpaper, at full resolution.
      *
      * Kept for the same reason as the video: a content URI belongs to whichever app the picture
@@ -346,6 +361,7 @@ class LauncherPrefs(context: Context) {
         private const val KEY_ICON_LABEL_SPACING = "icon_label_spacing"
         private const val KEY_VIDEO_PATH = "video_wallpaper_path"
         private const val KEY_ICON_PACK = "icon_pack_package"
+        private const val KEY_ICON_SHAPE = "icon_shape"
         private const val KEY_SIMPLE_MODE = "simple_mode"
         private const val KEY_ALLOW_ROTATION = "allow_rotation"
         private const val KEY_STILL_SOURCE = "still_wallpaper_source"

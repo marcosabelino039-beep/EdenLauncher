@@ -63,6 +63,28 @@
     <string name="settings_icon_pack">Icon pack</string>
     <string name="settings_icon_pack_none">None - use each app\'s own icon</string>
     <string name="settings_icon_pack_summary">Any icon pack you have installed. Apps the pack does not cover keep their own icon, unless the pack ships a background and mask to dress them with. For those, long-press the icon and pick one from the pack by hand.</string>
+
+    <!--
+        Icon shapes. Named for what they look like rather than for how they are drawn: nobody
+        picking one cares that a squircle is a superellipse. Kept short because they sit under a
+        swatch in a row that has to scroll.
+    -->
+    <string name="settings_icon_shape">Icon shape</string>
+    <string name="settings_icon_shape_summary">Cut every icon to the same outline, whatever it arrived as. This is applied on top of your icon pack, not instead of it - the pack still decides what each icon looks like. System leaves every icon the shape its author drew.</string>
+    <string name="settings_icon_shape_applied">Icon shape changed</string>
+    <string name="icon_shape_system">System</string>
+    <string name="icon_shape_circle">Circle</string>
+    <string name="icon_shape_square">Square</string>
+    <string name="icon_shape_rounded_square">Rounded square</string>
+    <string name="icon_shape_squircle">Squircle</string>
+    <string name="icon_shape_apple">Apple</string>
+    <string name="icon_shape_teardrop">Teardrop</string>
+    <string name="icon_shape_leaf">Leaf</string>
+    <string name="icon_shape_diamond">Diamond</string>
+    <string name="icon_shape_hexagon">Hexagon</string>
+    <string name="icon_shape_rounded_hexagon">Rounded hex</string>
+    <string name="icon_shape_octagon">Octagon</string>
+    <string name="icon_shape_cookie">Cookie</string>
     <string name="settings_icon_pack_empty">No icon packs installed. They are ordinary apps - install one and it will appear here.</string>
     <string name="settings_icon_pack_applied">Icon pack applied. Return to the home screen to see it.</string>
     <string name="settings_icon_size">Icon size</string>
@@ -172,6 +194,19 @@
     <string name="about_email">debadityamalakar@gmail.com</string>
     <string name="about_email_action">Send an email</string>
     <string name="about_email_subject">Eden</string>
+
+    <string name="about_tagline">A home screen that does what you tell it to.</string>
+    <string name="about_icon_description">The Eden icon</string>
+    <string name="about_section_author">Who made it</string>
+    <string name="about_author_name">AurielSolaris</string>
+    <string name="about_author_handle">github.com/AurielSolaris</string>
+    <string name="about_author_blurb">Eden is written and maintained by one person. It started because every launcher worth using either wanted a subscription or wanted to decide things on my behalf, and Launcher3 was sitting right there.
+
+Tap to open my GitHub - the source for Eden and everything else is there.</string>
+    <string name="about_author_url">https://github.com/AurielSolaris</string>
+    <string name="about_repo_action">Open the Eden repository</string>
+    <string name="about_repo_url">https://github.com/AurielSolaris/EdenLauncher</string>
+    <string name="about_no_browser">No app on this phone can open a link</string>
 
     <string name="settings_section_about">About</string>
     <string name="settings_folder_tap_outside">Tap beside a folder to close it</string>

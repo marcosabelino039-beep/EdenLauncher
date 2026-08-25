@@ -32,6 +32,12 @@
     <!-- Settings screen. -->
     <dimen name="settings_padding">20dp</dimen>
     <dimen name="settings_row_spacing">14dp</dimen>
+    <!-- Shape swatch inside a dropdown row: big enough to tell a squircle from a rounded square. -->
+    <dimen name="settings_shape_row_swatch">34dp</dimen>
+
+    <!-- About screen. The icon is the first thing on it, so it is sized to be looked at. -->
+    <dimen name="about_icon_size">96dp</dimen>
+    <dimen name="about_avatar_size">56dp</dimen>
 
     <!-- Per-icon options menu. -->
     <dimen name="icon_options_padding">18dp</dimen>

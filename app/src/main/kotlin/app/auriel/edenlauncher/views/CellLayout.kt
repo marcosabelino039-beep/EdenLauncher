@@ -10,9 +10,11 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -91,6 +93,29 @@ open class CellLayout @JvmOverloads constructor(
 
     /** Tap anywhere else on the card: zoom back into this page. */
     var onPageTap: (() -> Unit)? = null
+
+    /**
+     * Hold the card still: the workspace picks it up to be moved somewhere else in the order.
+     *
+     * A long press rather than a handle on the card, because a card in overview is already covered
+     * in things you can tap - two badges and the card itself - and a third target would have to be
+     * found rather than discovered. Holding an icon on the home screen picks it up; holding a card
+     * in overview picks that up. It is the same gesture one level out.
+     */
+    var onCardLongPress: (() -> Unit)? = null
+
+    /**
+     * Whether this card is the one being carried, drawn brighter so it reads as off the surface.
+     *
+     * Elevation alone is not enough: the cards are flat translucent rectangles over a wallpaper,
+     * and a shadow under one of them is not visible on every wallpaper. The stroke is.
+     */
+    var isLifted: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
 
     private val inOverview: Boolean get() = overviewProgress > 0.5f
 
@@ -196,12 +221,13 @@ open class CellLayout @JvmOverloads constructor(
         cardRect.set(0f, 0f, width.toFloat(), height.toFloat())
 
         cardPaint.color = cardFillColor
-        cardPaint.alpha = (Color.alpha(cardFillColor) * overviewProgress).toInt()
+        val fill = Color.alpha(cardFillColor) * overviewProgress
+        cardPaint.alpha = (if (isLifted) fill * LIFTED_FILL_BOOST else fill).toInt().coerceAtMost(255)
         canvas.drawRoundRect(cardRect, cardRadius, cardRadius, cardPaint)
 
-        cardStrokePaint.color = cardStrokeColor
+        cardStrokePaint.color = if (isLifted) badgeActiveColor else cardStrokeColor
         cardStrokePaint.alpha = alpha
-        cardStrokePaint.strokeWidth = 2f * density
+        cardStrokePaint.strokeWidth = (if (isLifted) LIFTED_STROKE_DP else 2f) * density
         canvas.drawRoundRect(cardRect, cardRadius, cardRadius, cardStrokePaint)
     }
 
@@ -275,18 +301,69 @@ open class CellLayout @JvmOverloads constructor(
      */
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = inOverview
 
+    /**
+     * The card's own gesture recogniser, which exists because the card is not an ordinary view.
+     *
+     * [View]'s long press is driven from `onTouchEvent`, and this never calls up to it in overview:
+     * the children are icons that must not take clicks while the page is a card, so every event is
+     * swallowed here and dealt with by hand. That leaves the hold to be timed here too.
+     *
+     * A move past the slop cancels the hold rather than starting a drag. Sideways movement is
+     * paging, and the workspace above has already had its chance to claim it - what arrives here is
+     * a finger that has stayed roughly still, which is the only thing a hold can be.
+     */
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         if (!inOverview) return super.onTouchEvent(ev)
-        if (ev.actionMasked != MotionEvent.ACTION_UP) return true
 
-        val x = ev.x.toInt()
-        val y = ev.y.toInt()
-        when {
-            homeBadgeRect.contains(x, y) -> onHomeBadgeTap?.invoke()
-            isRemovable && removeBadgeRect.contains(x, y) -> onRemoveBadgeTap?.invoke()
-            else -> onPageTap?.invoke()
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                cardDownX = ev.x
+                cardDownY = ev.y
+                cardHeldDown = false
+                postDelayed(cardLongPress, ViewConfiguration.getLongPressTimeout().toLong())
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (max(abs(ev.x - cardDownX), abs(ev.y - cardDownY)) > touchSlop) {
+                    removeCallbacks(cardLongPress)
+                }
+            }
+
+            MotionEvent.ACTION_UP -> {
+                removeCallbacks(cardLongPress)
+                // A hold that already fired has been taken over by the workspace, which normally
+                // means this card was sent a cancel instead. Guarded anyway: an up that follows a
+                // hold must not also zoom into the page.
+                if (!cardHeldDown) {
+                    val x = ev.x.toInt()
+                    val y = ev.y.toInt()
+                    when {
+                        homeBadgeRect.contains(x, y) -> onHomeBadgeTap?.invoke()
+                        isRemovable && removeBadgeRect.contains(x, y) -> onRemoveBadgeTap?.invoke()
+                        else -> onPageTap?.invoke()
+                    }
+                }
+            }
+
+            MotionEvent.ACTION_CANCEL -> removeCallbacks(cardLongPress)
         }
         return true
+    }
+
+    private var cardDownX = 0f
+    private var cardDownY = 0f
+    private var cardHeldDown = false
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+
+    private val cardLongPress = Runnable {
+        if (!inOverview) return@Runnable
+        cardHeldDown = true
+        onCardLongPress?.invoke()
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(cardLongPress)
+        super.onDetachedFromWindow()
     }
 
     fun setGridSize(x: Int, y: Int) {
@@ -525,5 +602,9 @@ open class CellLayout @JvmOverloads constructor(
         const val PREVIEW_INSET_DP = 4f
         const val PREVIEW_RADIUS_DP = 12f
         const val PREVIEW_STROKE_DP = 1.5f
+
+        /** How much brighter a card being carried is than one sitting still. */
+        const val LIFTED_FILL_BOOST = 1.9f
+        const val LIFTED_STROKE_DP = 3f
     }
 }
