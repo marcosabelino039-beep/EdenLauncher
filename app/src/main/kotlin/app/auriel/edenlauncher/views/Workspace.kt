@@ -17,8 +17,11 @@ import app.auriel.edenlauncher.folder.FolderIcon
 import app.auriel.edenlauncher.model.Containers
 import app.auriel.edenlauncher.model.FolderInfo
 import app.auriel.edenlauncher.model.ItemInfo
+import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.model.WidgetStackInfo
 import app.auriel.edenlauncher.util.EdenLog
+import app.auriel.edenlauncher.util.canScrollDeeply
 
 /**
  * The home screen: a [PagedView] whose pages are [CellLayout]s.
@@ -333,30 +336,44 @@ class Workspace @JvmOverloads constructor(
 
     override fun onDragExit(d: DragObject) = clearDropPreview()
 
-    /** The item under [tmpPoint] on [page], when it is something other than [info] itself. */
+    /**
+     * True when the drop would go *into* what is already under the finger rather than beside it.
+     *
+     * Two icons make a folder; two widgets make a stack; either dropped onto the container it
+     * belongs in joins it. Everything else is a plain move.
+     */
     private fun isOverAnotherIcon(page: CellLayout, info: ItemInfo): Boolean {
         page.pointToCell(tmpPoint[0], tmpPoint[1], tmpCell)
         val existingInfo = page.getChildAtCell(tmpCell[0], tmpCell[1])?.let(::viewInfo)
-        return existingInfo is ShortcutInfo && existingInfo !== info && info is ShortcutInfo
+        if (existingInfo == null || existingInfo === info) return false
+        return when (info) {
+            is ShortcutInfo -> existingInfo is ShortcutInfo
+            is LauncherAppWidgetInfo ->
+                existingInfo is LauncherAppWidgetInfo || existingInfo is WidgetStackInfo
+            else -> false
+        }
     }
 
     /**
      * Writes the cell an item of [info]'s span would land in at [tmpPoint] into [tmpCell].
      *
-     * The cell an item was picked up from stays marked occupied for the length of the drag - by the
+     * The cells an item was picked up from stay marked occupied for the length of the drag - by the
      * item itself, which is hidden rather than removed. Without the first check here, letting go
-     * where you picked up would push the icon one cell along instead of leaving it alone, which is
-     * the single most annoying thing a launcher can do while you are arranging a page. Only for
-     * single-cell items: a widget moved by less than its own size would need its whole new span
-     * checked, not just the corner.
+     * over the item's own footprint would push it a cell along instead of leaving it alone, which
+     * is the single most annoying thing a launcher can do while you are arranging a page.
+     *
+     * That check covers a widget as well as an icon, and for a widget it matters more: a finger on
+     * a 4x2 widget is somewhere in the middle of it, never on its corner, so treating the cell
+     * under the finger as a candidate origin would move a widget that was barely nudged. Released
+     * anywhere over itself, it stays exactly where it was.
      *
      * @return false when the page has no room at all.
      */
     private fun resolveDropCell(page: CellLayout, info: ItemInfo): Boolean {
         page.pointToCell(tmpPoint[0], tmpPoint[1], tmpCell)
-        if (info.spanX == 1 && info.spanY == 1 &&
-            page.getChildAtCell(tmpCell[0], tmpCell[1])?.let(::viewInfo) === info
-        ) {
+        if (page.getChildAtCell(tmpCell[0], tmpCell[1])?.let(::viewInfo) === info) {
+            tmpCell[0] = info.cellX
+            tmpCell[1] = info.cellY
             return true
         }
         return page.findNearestVacantCell(tmpPoint[0], tmpPoint[1], info.spanX, info.spanY, tmpCell)
@@ -404,6 +421,29 @@ class Workspace @JvmOverloads constructor(
         // Drop onto an open folder's icon: add to it.
         if (existing is FolderIcon && existingInfo is FolderInfo && info is ShortcutInfo) {
             handler.onItemAddedToFolder(existingInfo, info)
+            return
+        }
+
+        // Drop onto an existing stack of widgets: add to it.
+        if (existingInfo is WidgetStackInfo && info is LauncherAppWidgetInfo) {
+            handler.onWidgetAddedToStack(existingInfo, info)
+            return
+        }
+
+        // Drop onto another widget: stack the pair. The one already on the page keeps its cells
+        // and its size, exactly as the icon already on the page does when a folder is made.
+        if (existingInfo is LauncherAppWidgetInfo && info is LauncherAppWidgetInfo &&
+            existingInfo !== info
+        ) {
+            handler.onWidgetStackRequested(
+                target = existingInfo,
+                dropped = info,
+                targetView = existing,
+                container = Containers.DESKTOP,
+                screenId = screenId,
+                cellX = tmpCell[0],
+                cellY = tmpCell[1],
+            )
             return
         }
 
@@ -774,6 +814,21 @@ class Workspace @JvmOverloads constructor(
     private var downX = 0f
     private var downY = 0f
     private var swipeConsumed = false
+
+    /**
+     * True when the press landed on something that scrolls, so this gesture is not the launcher's.
+     *
+     * A widget with a list in it, or a stack of widgets waiting to be flicked, answers an upward
+     * drag itself. Reading the same drag as "open the drawer" would make that content unusable, so
+     * the question is asked once, on the way down, of whatever is under the finger.
+     *
+     * Asked here rather than solved with `requestDisallowInterceptTouchEvent`, which the child
+     * would otherwise have to call: that reaches every ancestor, the drag layer included, and the
+     * drag layer is what turns a long press into a drag - so a child that asked for it could never
+     * be picked up again.
+     */
+    private var swipeBlocked = false
+
     private val swipeThresholdPx = SWIPE_THRESHOLD_DP * resources.displayMetrics.density
 
     /**
@@ -789,6 +844,7 @@ class Workspace @JvmOverloads constructor(
             downX = ev.x
             downY = ev.y
             swipeConsumed = false
+            swipeBlocked = childUnder(ev.x, ev.y)?.canScrollDeeply(1) == true
         }
         return super.onInterceptTouchEvent(ev)
     }
@@ -820,7 +876,7 @@ class Workspace @JvmOverloads constructor(
      * to be clearly more vertical than horizontal.
      */
     override fun determineScrollingStart(ev: MotionEvent, touchSlopScale: Float) {
-        if (!swipeConsumed && onSwipeUp != null) {
+        if (!swipeConsumed && !swipeBlocked && onSwipeUp != null) {
             val dy = ev.y - downY
             val dx = ev.x - downX
             if (dy < -swipeThresholdPx && -dy > kotlin.math.abs(dx) * VERTICAL_BIAS) {
@@ -830,6 +886,28 @@ class Workspace @JvmOverloads constructor(
             }
         }
         super.determineScrollingStart(ev, touchSlopScale)
+    }
+
+    /**
+     * The item on the current page under a point in this view's coordinates, or null.
+     *
+     * A plain rectangle test over the page's children rather than a cell lookup: it runs on the
+     * way down of every touch, and a widget's cells say nothing about where the finger is inside
+     * it. Nothing here allocates.
+     */
+    private fun childUnder(x: Float, y: Float): View? {
+        val page = currentCellLayout ?: return null
+        val localX = x + scrollX - page.left
+        val localY = y - page.top
+        for (i in 0 until page.childCount) {
+            val child = page.getChildAt(i)
+            if (localX >= child.left && localX < child.right &&
+                localY >= child.top && localY < child.bottom
+            ) {
+                return child
+            }
+        }
+        return null
     }
 
     override fun onPageEndMoving() {

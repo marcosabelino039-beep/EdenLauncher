@@ -49,6 +49,23 @@ class LauncherAppState private constructor(private val context: Context) {
     /** Consumes the flag: true exactly once per wallpaper change. */
     fun consumeWallpaperChanged(): Boolean = wallpaperChanged.getAndSet(false)
 
+    private val dataRestored = AtomicBoolean(false)
+
+    /**
+     * A backup was restored: everything the launcher is holding is now the wrong arrangement.
+     *
+     * Flagged rather than acted on, because the restore happens in the settings activity while the
+     * launcher is behind it. The launcher picks this up when it next resumes and rebuilds itself
+     * from the database that has just been replaced underneath it.
+     */
+    fun onDataRestored() {
+        dataRestored.set(true)
+        iconCache.clear()
+    }
+
+    /** Consumes the flag: true exactly once per restore. */
+    fun consumeDataRestored(): Boolean = dataRestored.getAndSet(false)
+
     /** Recomputes grid metrics after a density, size, or orientation change. */
     fun onConfigurationChanged() {
         invariantDeviceProfile = InvariantDeviceProfile.create(context)

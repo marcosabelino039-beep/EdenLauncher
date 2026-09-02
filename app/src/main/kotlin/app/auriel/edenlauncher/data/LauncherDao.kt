@@ -51,28 +51,65 @@ abstract class LauncherDao {
     @Query("DELETE FROM favorites WHERE _id = :id")
     abstract suspend fun deleteFavoriteById(id: Long)
 
-    /** Deletes a folder and everything inside it. */
-    @Query("DELETE FROM favorites WHERE _id = :folderId OR container = :folderId")
-    abstract suspend fun deleteFolderAndContents(folderId: Long)
+    /** Deletes a container row - a folder or a widget stack - and everything inside it. */
+    @Query("DELETE FROM favorites WHERE _id = :containerId OR container = :containerId")
+    abstract suspend fun deleteContainerAndContents(containerId: Long)
+
+    /**
+     * The widget ids held by the children of one container.
+     *
+     * Read before the container is deleted: a stack's children are hosted widgets, and their ids
+     * have to be handed back to the system once their rows are gone or they are leaked for the
+     * life of the install.
+     */
+    @Query("SELECT appWidgetId FROM favorites WHERE container = :containerId AND appWidgetId >= 0")
+    abstract suspend fun widgetIdsInContainer(containerId: Long): List<Int>
+
+    /** Every widget id the database still refers to, wherever the row sits. */
+    @Query("SELECT appWidgetId FROM favorites WHERE appWidgetId >= 0")
+    abstract suspend fun allWidgetIds(): List<Int>
 
     @Query("DELETE FROM favorites WHERE container = :container AND screen = :screen")
     abstract suspend fun deleteScreenContents(container: Long, screen: Long)
 
     @Query(
         "SELECT _id FROM favorites " +
-            "WHERE container = :container AND screen = :screen AND itemType = :folderItemType",
+            "WHERE container = :container AND screen = :screen AND itemType IN (:containerTypes)",
     )
-    abstract suspend fun folderIdsOnScreen(
+    abstract suspend fun containerIdsOnScreen(
         container: Long,
         screen: Long,
-        folderItemType: Int,
+        containerTypes: List<Int>,
     ): List<Long>
+
+    /** Widget ids belonging to a page: the widgets on it, and the ones inside its stacks. */
+    @Query(
+        """
+        SELECT appWidgetId FROM favorites
+        WHERE appWidgetId >= 0
+          AND (
+            (container = :container AND screen = :screen)
+            OR container IN (
+                SELECT _id FROM favorites
+                WHERE container = :container AND screen = :screen AND itemType IN (:containerTypes)
+            )
+          )
+        """,
+    )
+    abstract suspend fun widgetIdsOnScreen(
+        container: Long,
+        screen: Long,
+        containerTypes: List<Int>,
+    ): List<Int>
 
     @Query("DELETE FROM favorites WHERE container IN (:containerIds)")
     abstract suspend fun deleteItemsInContainers(containerIds: List<Long>)
 
     @Query("SELECT COUNT(*) FROM favorites")
     abstract suspend fun favoriteCount(): Int
+
+    @Query("DELETE FROM favorites")
+    abstract suspend fun clearFavorites()
 
     // ---- workspace screens -----------------------------------------------------------------
 
@@ -104,21 +141,44 @@ abstract class LauncherDao {
     /**
      * Removes a page and everything on it, folders included.
      *
-     * The folder children have to go first and by hand. A folder's own row sits on the page and is
-     * swept by [deleteScreenContents], but its children do not - their container is the folder's
-     * id, not the desktop, so they survive the page that held them and become rows pointing at a
-     * parent that no longer exists. Invisible, permanent, and carried forward forever.
+     * The children of a folder or a stack have to go first and by hand. The container's own row
+     * sits on the page and is swept by [deleteScreenContents], but its children do not - their
+     * container is that row's id, not the desktop, so they survive the page that held them and
+     * become rows pointing at a parent that no longer exists. Invisible, permanent, and carried
+     * forward forever.
      */
     @Transaction
     open suspend fun deleteScreenWithContents(
         screenId: Long,
         desktopContainer: Long,
-        folderItemType: Int,
+        containerTypes: List<Int>,
     ) {
-        val folderIds = folderIdsOnScreen(desktopContainer, screenId, folderItemType)
-        if (folderIds.isNotEmpty()) deleteItemsInContainers(folderIds)
+        val containerIds = containerIdsOnScreen(desktopContainer, screenId, containerTypes)
+        if (containerIds.isNotEmpty()) deleteItemsInContainers(containerIds)
         deleteScreenContents(desktopContainer, screenId)
         deleteScreen(screenId)
+    }
+
+    /**
+     * Swaps the entire workspace for another one, atomically.
+     *
+     * What a restore needs and the only safe way to do it: a crash or a kill between the wipe and
+     * the insert would otherwise leave the user with no home screen at all, having asked to get
+     * their old one back. Either the whole arrangement lands or none of it does.
+     *
+     * The rows keep the ids they were exported with. They have to: a folder's children name it by
+     * its `_id`, and the home-page preference names a screen the same way, so renumbering on the
+     * way in would quietly scatter every folder and forget which page was home.
+     */
+    @Transaction
+    open suspend fun replaceAll(
+        screens: List<WorkspaceScreenEntity>,
+        favorites: List<FavoriteEntity>,
+    ) {
+        clearFavorites()
+        clearScreens()
+        insertScreens(screens)
+        insertFavorites(favorites)
     }
 
     /**
@@ -132,8 +192,8 @@ abstract class LauncherDao {
         """
         DELETE FROM favorites
         WHERE container NOT IN (:rootContainers)
-          AND container NOT IN (SELECT _id FROM favorites WHERE itemType = :folderItemType)
+          AND container NOT IN (SELECT _id FROM favorites WHERE itemType IN (:containerTypes))
         """,
     )
-    abstract suspend fun deleteOrphans(rootContainers: List<Long>, folderItemType: Int): Int
+    abstract suspend fun deleteOrphans(rootContainers: List<Long>, containerTypes: List<Int>): Int
 }

@@ -10,15 +10,20 @@ import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
 
 /**
- * Stands in for a widget that the launcher stores but cannot yet render.
+ * Stands in for a widget the launcher stores but cannot draw.
  *
- * Widget hosting needs an `AppWidgetHost` bound to the activity lifecycle, a provider list from
- * `AppWidgetManager`, the `BIND_APPWIDGET` permission flow, and resize frames - a phase of its own.
- * Until then, a stored widget row would simply vanish from the screen, and the user would have no
- * way to tell whether it was lost or merely not drawn. This tile says which.
+ * There are two ways to end up here and they need different answers.
  *
- * The row, its `appWidgetId`, and its provider stay in the database throughout, so the widget
- * reappears intact once hosting lands. See [app.auriel.edenlauncher.model.LauncherAppWidgetInfo].
+ * The provider is **gone** - the app was uninstalled, or it stopped shipping that widget. Nothing
+ * can be done about it, so the tile says which app is missing and waits to be dragged off or
+ * removed. The row stays until then: silently deleting a widget because an app is being updated is
+ * how an arrangement quietly loses pieces.
+ *
+ * The provider is **there but the widget is not bound** - the usual cause is a restore. Widget ids
+ * are issued by the system to one install and mean nothing to the next, so a backup deliberately
+ * does not carry them and every widget comes back unbound. That is repairable, and the tile says
+ * so: tapping it runs the bind (and, if the provider asks for one, its configuration screen) and
+ * the widget comes back where it was, at the size it was.
  */
 class WidgetPlaceholderView @JvmOverloads constructor(
     context: Context,
@@ -35,20 +40,44 @@ class WidgetPlaceholderView @JvmOverloads constructor(
         strokeWidth = 2f * resources.displayMetrics.density
     }
 
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = context.getColor(R.color.settings_text)
+        textAlign = Paint.Align.CENTER
+        textSize = 13f * resources.displayMetrics.scaledDensity
+    }
+
+    private val detailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = context.getColor(R.color.settings_text_secondary)
         textAlign = Paint.Align.CENTER
-        textSize = 12f * resources.displayMetrics.scaledDensity
+        textSize = 11f * resources.displayMetrics.scaledDensity
     }
 
     private val bounds = RectF()
     private val cornerRadius = 12f * resources.displayMetrics.density
+    private val lineGap = 4f * resources.displayMetrics.density
 
-    private var label: String = context.getString(R.string.widget_placeholder)
+    private var title: String = context.getString(R.string.widget_placeholder)
+    private var detail: String? = null
 
-    fun applyFrom(info: LauncherAppWidgetInfo) {
-        label = info.providerName?.packageName ?: context.getString(R.string.widget_placeholder)
-        contentDescription = context.getString(R.string.widget_placeholder)
+    /** Set when the widget can be brought back; tapping the tile calls it. */
+    var onRestore: (() -> Unit)? = null
+        set(value) {
+            field = value
+            isClickable = value != null
+            setOnClickListener(if (value == null) null else OnClickListener { value.invoke() })
+        }
+
+    fun applyFrom(info: LauncherAppWidgetInfo, restorable: Boolean) {
+        val provider = info.providerName
+        title = info.title?.toString()
+            ?: provider?.packageName
+            ?: context.getString(R.string.widget_placeholder)
+        detail = if (restorable) {
+            context.getString(R.string.widget_restore_hint)
+        } else {
+            context.getString(R.string.widget_placeholder_missing)
+        }
+        contentDescription = "$title. ${detail.orEmpty()}"
         invalidate()
     }
 
@@ -58,7 +87,16 @@ class WidgetPlaceholderView @JvmOverloads constructor(
         canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, fillPaint)
         canvas.drawRoundRect(bounds, cornerRadius, cornerRadius, strokePaint)
 
-        val baseline = height / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
-        canvas.drawText(label, width / 2f, baseline, textPaint)
+        val centre = width / 2f
+        val titleHeight = titlePaint.descent() - titlePaint.ascent()
+        val detailHeight = if (detail == null) 0f else detailPaint.descent() - detailPaint.ascent()
+        val block = titleHeight + if (detail == null) 0f else detailHeight + lineGap
+
+        var baseline = (height - block) / 2f - titlePaint.ascent()
+        canvas.drawText(title, centre, baseline, titlePaint)
+
+        val detailText = detail ?: return
+        baseline += titlePaint.descent() + lineGap - detailPaint.ascent()
+        canvas.drawText(detailText, centre, baseline, detailPaint)
     }
 }

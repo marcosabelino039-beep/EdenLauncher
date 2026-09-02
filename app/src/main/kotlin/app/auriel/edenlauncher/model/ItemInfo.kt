@@ -34,6 +34,16 @@ enum class ItemType(val code: Int) {
     APP_WIDGET(4),
     CUSTOM_APP_WIDGET(5),
     DEEP_SHORTCUT(6),
+
+    /**
+     * A pile of widgets sharing one block of the grid. Eden's own; AOSP has no equivalent.
+     *
+     * Codes below 100 belong to AOSP Launcher3 and it goes on adding to them, so Eden's own kinds
+     * start at 100. An imported stock database can never contain one, and an Eden database read by
+     * something expecting Launcher3's schema sees a row it does not know rather than one it
+     * misreads as something else.
+     */
+    WIDGET_STACK(100),
     ;
 
     companion object {
@@ -45,6 +55,7 @@ enum class ItemType(val code: Int) {
             4 -> APP_WIDGET
             5 -> CUSTOM_APP_WIDGET
             6 -> DEEP_SHORTCUT
+            100 -> WIDGET_STACK
             else -> null
         }
     }

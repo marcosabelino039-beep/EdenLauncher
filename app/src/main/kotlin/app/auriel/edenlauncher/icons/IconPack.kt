@@ -131,6 +131,18 @@ class IconPack(context: Context, val packageName: String) {
         return null
     }
 
+    /**
+     * True when the pack has its own drawing for [component].
+     *
+     * The question without the answer, for callers that only need to know whether the pack has
+     * taken the app over - decoding a drawable to throw it away is a waste on any path that runs
+     * more than once, and the clock pass runs every minute.
+     */
+    fun themes(component: ComponentName): Boolean {
+        ensureParsed()
+        return drawableForComponent.containsKey(component.flattenToString())
+    }
+
     /** The pack's own icon for [component], or null when the pack does not theme that app. */
     fun drawableFor(component: ComponentName): Drawable? {
         ensureParsed()

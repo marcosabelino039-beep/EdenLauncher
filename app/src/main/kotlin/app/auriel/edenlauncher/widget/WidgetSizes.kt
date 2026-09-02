@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Build
 import android.util.SizeF
 import android.util.TypedValue
+import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.device.DeviceProfile
 import kotlin.math.ceil
 import kotlin.math.max
@@ -86,6 +87,42 @@ object WidgetSizes {
                 heightDp.toInt(),
                 widthDp.toInt(),
                 heightDp.toInt(),
+            )
+        }
+    }
+
+    /**
+     * Tells the widget every size it will be shown at, given the cells it occupies.
+     *
+     * Better than [applySize] wherever the span is known, because a phone shows the same widget at
+     * two sizes - one per orientation - and a provider handed only the current one reinflates on
+     * every rotation, which is the stutter you see when a stock widget flashes on turning the
+     * phone. Both are sent at once on API 31 and up, where the platform can carry a list; below
+     * that the API takes a min/max box, so the two sizes become its corners.
+     */
+    fun applySpan(view: AppWidgetHostView, context: Context, spanX: Int, spanY: Int) {
+        val idp = LauncherAppState.getInstance(context).invariantDeviceProfile
+        val portrait = idp.profileFor(isLandscape = false)
+        val landscape = idp.profileFor(isLandscape = true)
+
+        val portraitW = toDp(context, spanX * portrait.cellWidthPx)
+        val portraitH = toDp(context, spanY * portrait.cellHeightPx)
+        val landscapeW = toDp(context, spanX * landscape.cellWidthPx)
+        val landscapeH = toDp(context, spanY * landscape.cellHeightPx)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            view.updateAppWidgetSize(
+                android.os.Bundle(),
+                listOf(SizeF(portraitW, portraitH), SizeF(landscapeW, landscapeH)),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            view.updateAppWidgetSize(
+                null,
+                min(portraitW, landscapeW).toInt(),
+                min(portraitH, landscapeH).toInt(),
+                max(portraitW, landscapeW).toInt(),
+                max(portraitH, landscapeH).toInt(),
             )
         }
     }

@@ -71,7 +71,14 @@ Eden gives that back. Every one of those is a setting, and the defaults are only
 - **Widgets, hosted properly.** Every widget your phone provides, grouped by app, each one labelled
   with how many cells it will take *on your grid* rather than on some assumed one - and anything
   that cannot fit is shown but not offered, instead of failing after you have already agreed to it.
-  Drag them between pages, and drag the handles to resize in whole cells.
+  Drag them between pages, and drag the handles to resize in whole cells. They are rounded to match
+  the rest of the system, a widget with a list in it scrolls instead of turning the page, and a
+  widget's own settings screen stays reachable from its long-press menu instead of being a
+  one-time question on the way in.
+- **Widget stacks.** Drop one widget onto another and they share the block, one on top: swipe up or
+  down on it to change which. Four widgets in the space of one, no folder to open, and the one you
+  left facing you is the one that is there when you come back. Take the top one out again whenever
+  you like; a stack down to its last widget quietly becomes a plain widget.
 - **A simple mode, if you want less.** One switch turns Eden back into what it was at v0.2.0 - a
   home screen, a drawer, wallpapers, and the settings for them. It puts things away; it never
   deletes them, and everything comes back the moment you switch it off.
@@ -91,9 +98,10 @@ Every shot below is Eden 0.4.0 running on a Galaxy M31 (Android 16), captured of
 icons are themed by an icon pack the phone already had installed - nothing here is a mockup, and
 nothing was retouched.
 
-> **These screenshots are out of date.** They are from 0.4.0 and Eden is now on 0.6.0. Two releases
-> of features are missing from them - widgets, simple mode, folders you can take apps back out of,
-> icon shapes, page reordering - and the launcher is a good deal more stable than the one pictured.
+> **These screenshots are out of date.** They are from 0.4.0 and Eden is now on 0.6.1. Three
+> releases of features are missing from them - widgets, widget stacks, simple mode, folders you can
+> take apps back out of, icon shapes, page reordering, backup and restore - and the launcher is a
+> good deal more stable than the one pictured.
 > Nothing shown here has been removed; there is simply more of it now. New shots are on the list.
 
 ### Home screen
@@ -307,7 +315,7 @@ Eden/
         |-- icons/                  Icon packs, the in-pack browser, per-app overrides
         |-- media/                  MediaCodec video transcoder
         |-- settings/               Preferences and the settings screen
-        |-- widget/                 AppWidgetHost, the picker, resize frames
+        |-- widget/                 AppWidgetHost, the picker, resize frames, widget stacks
         `-- util/                   Icon cache, user cache, bitmap helpers, the on-device log
 ```
 

@@ -9,6 +9,7 @@ import app.auriel.edenlauncher.model.ItemType
 import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
 import app.auriel.edenlauncher.model.NO_ID
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.model.WidgetStackInfo
 import app.auriel.edenlauncher.util.EdenLog
 import app.auriel.edenlauncher.util.UserCache
 import app.auriel.edenlauncher.util.flatten
@@ -35,6 +36,10 @@ fun FavoriteEntity.toItemInfo(users: UserCache): ItemInfo? {
 
     val info: ItemInfo = when (type) {
         ItemType.FOLDER -> FolderInfo().also { it.options = options }
+
+        // A stack keeps the widget the user left facing them in `options`, not in `rank`: `rank`
+        // is rewritten to 0 by every drop onto the desktop. See [WidgetStackInfo].
+        ItemType.WIDGET_STACK -> WidgetStackInfo().also { it.visibleIndex = options }
 
         ItemType.APP_WIDGET, ItemType.CUSTOM_APP_WIDGET -> LauncherAppWidgetInfo().also {
             it.appWidgetId = appWidgetId
@@ -91,6 +96,7 @@ fun ItemInfo.toEntity(users: UserCache, modifiedAt: Long): FavoriteEntity {
     val shortcut = this as? ShortcutInfo
     val widget = this as? LauncherAppWidgetInfo
     val folder = this as? FolderInfo
+    val stack = this as? WidgetStackInfo
 
     return FavoriteEntity(
         id = if (id == NO_ID) 0 else id,
@@ -113,7 +119,7 @@ fun ItemInfo.toEntity(users: UserCache, modifiedAt: Long): FavoriteEntity {
         profileId = users.serialFor(user),
         rank = rank,
         restored = shortcut?.status ?: widget?.restoreStatus ?: 0,
-        options = folder?.options ?: 0,
+        options = folder?.options ?: stack?.visibleIndex ?: 0,
         modified = modifiedAt,
     )
 }

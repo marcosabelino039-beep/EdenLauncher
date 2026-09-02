@@ -1,13 +1,16 @@
 package app.auriel.edenlauncher.settings
 
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.AdaptiveIconDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -20,8 +23,17 @@ import android.widget.SeekBar
 import android.widget.TextView
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
+import app.auriel.edenlauncher.backup.BackupException
+import app.auriel.edenlauncher.backup.LauncherBackup
 import app.auriel.edenlauncher.icons.IconPacks
 import app.auriel.edenlauncher.icons.IconShape
+import app.auriel.edenlauncher.util.EdenLog
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.io.IOException
 
 /**
  * Launcher settings.
@@ -40,11 +52,24 @@ class SettingsActivity : Activity() {
     /** Held so the row can show the chosen pack's name without rebuilding the screen. */
     private var iconPackRow: View? = null
 
+    /**
+     * Scope for the backup reads and writes, cancelled in [onDestroy].
+     *
+     * Hand-rolled for the same reason the launcher's is: one `CoroutineScope` is all a lifecycle
+     * dependency would buy here.
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = LauncherPrefs(this)
         setContentView(buildContentView())
         title = getString(R.string.settings_title)
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
     }
 
     private fun buildContentView(): View {
@@ -197,6 +222,18 @@ class SettingsActivity : Activity() {
 
         column.addView(visualizerAudioToggle(), spacedParams(spacing))
         column.addView(videoAudioToggle(), spacedParams(spacing))
+
+        column.addView(header(getString(R.string.settings_section_backup)), spacedParams(spacing * 2))
+        column.addView(summary(getString(R.string.settings_backup_summary)))
+
+        column.addView(
+            actionRow(getString(R.string.settings_backup_export)) { exportBackup() },
+            spacedParams(spacing),
+        )
+        column.addView(
+            actionRow(getString(R.string.settings_backup_import)) { confirmImportBackup() },
+            spacedParams(spacing),
+        )
 
         column.addView(
             header(getString(R.string.settings_section_troubleshooting)),
@@ -517,6 +554,156 @@ class SettingsActivity : Activity() {
             setOnClickListener { onClick() }
         }
 
+    // ---- backup ----------------------------------------------------------------------------------
+
+    /**
+     * Writes the whole arrangement to a file the user chooses.
+     *
+     * Through the document picker rather than to a path of Eden's own: a backup the launcher keeps
+     * inside its own storage is deleted with the launcher, which is one of the two occasions anyone
+     * wants one. The user puts it where their other files are.
+     */
+    private fun exportBackup() {
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(BACKUP_MIME)
+            .putExtra(Intent.EXTRA_TITLE, LauncherBackup.suggestedFileName())
+        startPicker(intent, REQUEST_EXPORT_BACKUP)
+    }
+
+    /**
+     * Asks before restoring, because a restore is not additive.
+     *
+     * The one destructive action in the settings screen, and the only one worth a dialog: it
+     * replaces the home screen the user is looking at, and there is no undo but another backup.
+     */
+    private fun confirmImportBackup() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.settings_backup_import)
+            .setMessage(R.string.settings_backup_import_warning)
+            .setPositiveButton(R.string.settings_backup_import_confirm) { _, _ -> pickBackup() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun pickBackup() {
+        // Not filtered by MIME type on purpose. Providers disagree about what a .jsonl file is -
+        // several report it as octet-stream - and a filter on application/json hides the very file
+        // the user is looking for, with no way to tell them why.
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+        startPicker(intent, REQUEST_IMPORT_BACKUP)
+    }
+
+    private fun startPicker(intent: Intent, requestCode: Int) {
+        try {
+            startActivityForResult(intent, requestCode)
+        } catch (e: ActivityNotFoundException) {
+            EdenLog.w(TAG, "No document picker for a backup", e)
+            toast(getString(R.string.activity_not_found))
+        }
+    }
+
+    @Deprecated("Plain Activity has no result registry; the androidx one is not worth the dependency")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) return
+        when (requestCode) {
+            REQUEST_EXPORT_BACKUP -> runExport(uri)
+            REQUEST_IMPORT_BACKUP -> runImport(uri)
+        }
+    }
+
+    private fun runExport(uri: Uri) {
+        scope.launch {
+            runCatching {
+                // "wt" truncates. Without it, writing a smaller backup over a larger one leaves the
+                // tail of the old file behind, and the result parses right up to the junk.
+                contentResolver.openOutputStream(uri, "wt")
+                    ?.use { LauncherBackup.exportTo(this@SettingsActivity, it) }
+                    ?: throw IOException("the document picker returned nothing to write to")
+            }.onSuccess { summary ->
+                toast(
+                    getString(
+                        R.string.settings_backup_exported,
+                        summary.items,
+                        summary.screens,
+                        summary.icons,
+                    ),
+                )
+            }.onFailure { failure ->
+                EdenLog.w(TAG, "Backup export failed", failure)
+                showFailure(failure)
+            }
+        }
+    }
+
+    private fun runImport(uri: Uri) {
+        scope.launch {
+            runCatching {
+                contentResolver.openInputStream(uri)
+                    ?.use { LauncherBackup.importFrom(this@SettingsActivity, it) }
+                    ?: throw IOException("the document picker returned nothing to read")
+            }.onSuccess { summary ->
+                // The launcher behind this screen is still holding the arrangement that was just
+                // replaced. Flagging it here is what makes it rebuild when it next resumes.
+                LauncherAppState.getInstance(this@SettingsActivity).onDataRestored()
+                val restored = getString(
+                    R.string.settings_backup_imported,
+                    summary.items,
+                    summary.screens,
+                )
+                // This screen is showing the settings from before the restore, every one of which
+                // may now be wrong, so it has to be rebuilt - but a rebuild takes any dialog down
+                // with it. So the report waits for the dismissal when there is something to report.
+                if (summary.unresolved.isEmpty()) {
+                    toast(restored)
+                    recreate()
+                } else {
+                    // A dialog rather than a toast: this is a list of things the user has to go and
+                    // do something about, and a toast is gone before it can be read.
+                    android.app.AlertDialog.Builder(this@SettingsActivity)
+                        .setTitle(R.string.settings_section_backup)
+                        .setMessage(
+                            restored + "\n\n" + getString(
+                                R.string.settings_backup_unresolved,
+                                summary.unresolved.joinToString("\n") { "- $it" },
+                            ),
+                        )
+                        .setPositiveButton(android.R.string.ok, null)
+                        .setOnDismissListener { recreate() }
+                        .show()
+                }
+            }.onFailure { failure ->
+                EdenLog.w(TAG, "Backup import failed", failure)
+                showFailure(failure)
+            }
+        }
+    }
+
+    /**
+     * Says what went wrong in the user's terms.
+     *
+     * A [BackupException] already carries a sentence meant to be read; anything else is a stream or
+     * storage failure whose message is not, so it gets a plain one.
+     */
+    private fun showFailure(failure: Throwable) {
+        val message = (failure as? BackupException)?.message
+            ?: getString(R.string.settings_backup_failed)
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.settings_section_backup)
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .show()
+    }
+
+    private fun toast(text: String) {
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show()
+    }
+
     // ---- icon packs ------------------------------------------------------------------------------
 
     /**
@@ -818,8 +1005,22 @@ class SettingsActivity : Activity() {
         ).apply { topMargin = spacing }
 
     private companion object {
+        const val TAG = "SettingsActivity"
+
         const val ID_VERTICAL = 1
         const val ID_HORIZONTAL = 2
         const val REQUEST_RECORD_AUDIO = 10
+        const val REQUEST_EXPORT_BACKUP = 11
+        const val REQUEST_IMPORT_BACKUP = 12
+
+        /**
+         * What the file is created as.
+         *
+         * There is no registered type for JSON Lines, and `application/jsonl` is not one any
+         * picker knows. `application/json` is close enough to be handled sensibly everywhere and
+         * honest about what the bytes are; the `.jsonl` suffix on the suggested name is what tells
+         * a person which of the two they are looking at.
+         */
+        const val BACKUP_MIME = "application/json"
     }
 }
