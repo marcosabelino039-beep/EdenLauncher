@@ -42,6 +42,9 @@
     <!-- Resize handles: bright enough to find on any wallpaper a widget might be sitting on. -->
     <color name="widget_resize_border">#CCA8E6C1</color>
     <color name="widget_resize_handle">#FF7FE7A5</color>
+    <!-- The dots down the edge of a widget stack: legible on any wallpaper, quiet when not the
+         one you are on. -->
+    <color name="widget_stack_dot_idle">#FFC7E9D2</color>
     <color name="widget_picker_row">#16211B</color>
 
     <color name="overview_card_fill">#591B241E</color>

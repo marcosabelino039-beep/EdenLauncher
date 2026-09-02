@@ -8,6 +8,8 @@ import app.auriel.edenlauncher.dragndrop.DragObject
 import app.auriel.edenlauncher.dragndrop.DropTarget
 import app.auriel.edenlauncher.dragndrop.ItemPlacementHandler
 import app.auriel.edenlauncher.model.Containers
+import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
+import app.auriel.edenlauncher.model.WidgetStackInfo
 
 /**
  * The dock: a single-row (or single-column, in landscape) [CellLayout] pinned below the workspace.
@@ -51,7 +53,19 @@ class Hotseat @JvmOverloads constructor(
 
     override val isDropEnabled: Boolean get() = true
 
-    override fun acceptDrop(d: DragObject): Boolean = d.dragInfo != null
+    /**
+     * The dock takes icons only.
+     *
+     * It is one file of single cells, and a widget - or a stack of them - carries a size of its
+     * own. Dropped here it would be laid out across its neighbours, or squashed into a cell no
+     * provider can render. Refusing the drop leaves it where it was, which is the only outcome
+     * that is not a mess to undo.
+     */
+    override fun acceptDrop(d: DragObject): Boolean {
+        val info = d.dragInfo ?: return false
+        if (info is LauncherAppWidgetInfo || info is WidgetStackInfo) return false
+        return info.spanX == 1 && info.spanY == 1
+    }
 
     override fun onDrop(d: DragObject) {
         val info = d.dragInfo ?: return

@@ -8,6 +8,8 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.os.UserHandle
 import android.util.LruCache
+import app.auriel.edenlauncher.icons.ClockIcons
+import app.auriel.edenlauncher.icons.ClockLayers
 import app.auriel.edenlauncher.icons.CustomIcons
 import app.auriel.edenlauncher.icons.IconPack
 import app.auriel.edenlauncher.icons.IconShape
@@ -159,6 +161,17 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
      * its `appfilter.xml`, and every call after that may compose four layers.
      */
     fun themedIcon(activity: LauncherActivityInfo, user: UserHandle): Bitmap? {
+        // A clock the scan has already identified is drawn as a clock, not fetched from a cache
+        // that by definition holds a picture of it stopped. Without this the theming pass would put
+        // the frozen drawing back on screen at the start of every rebind - an install, an icon-pack
+        // change - and the clock would visibly jump back in time until the next scan finished.
+        //
+        // Falls through when it declines: a pack that draws its own clock icon, or an icon the user
+        // picked, has replaced the artwork, and the ordinary path is what applies those.
+        if (knownClockLayers(activity.componentName) != null) {
+            clockIcon(activity, user)?.let { return it }
+        }
+
         if (!hasThemedSource) return null
 
         val key = Key(activity.componentName, user)
@@ -216,6 +229,93 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
         return null
     }
 
+    // ---- clocks ----------------------------------------------------------------------------------
+
+    /**
+     * What each component's clock metadata turned out to be, null included.
+     *
+     * The negative answers are the whole point of keeping this: almost no app is a clock, and
+     * without somewhere to record that, the discovery pass would ask the package manager about
+     * every app on the phone again after every rebind.
+     *
+     * A plain map behind a lock rather than an [LruCache] - it holds one null per installed app and
+     * nothing bigger, and an entry evicted under memory pressure would only be fetched again.
+     */
+    private val clockLayers = HashMap<ComponentName, ClockLayers?>(256)
+
+    /**
+     * The clock metadata for [activity], asking the package manager the first time only.
+     *
+     * Costs one package-manager call per app it has not seen, so it belongs on the discovery pass
+     * that runs after the home screen is already bound - never on a load, and never on a tick.
+     */
+    fun clockLayersFor(activity: LauncherActivityInfo): ClockLayers? {
+        val component = activity.componentName
+        synchronized(clockLayers) {
+            if (clockLayers.containsKey(component)) return clockLayers[component]
+        }
+        val layers = ClockIcons.layersFor(context, component)
+        synchronized(clockLayers) { clockLayers[component] = layers }
+
+        // The first pass may already have cached a themed drawing of this app before anyone knew it
+        // was a clock. It is a picture of a stopped one; drop it rather than let it be served again.
+        if (layers != null) themedCache.remove(Key(component, activity.user))
+        return layers
+    }
+
+    /**
+     * What is already known about [component], without asking the package manager.
+     *
+     * For callers that must not pay for the answer - the theming pass runs over every app there is,
+     * and a package-manager call per app is the cost the discovery pass exists to keep off it.
+     */
+    private fun knownClockLayers(component: ComponentName): ClockLayers? =
+        synchronized(clockLayers) { clockLayers[component] }
+
+    /**
+     * [activity]'s icon with its hands where they belong right now, or null when it has none to
+     * move.
+     *
+     * Nothing is cached. A clock icon is wrong the minute after it is drawn, and an entry that is
+     * always stale is worse than no entry - the tick pass would keep being handed the drawing it
+     * asked to replace.
+     *
+     * The pipeline runs in full and in order: the hands turn on the raw drawable, the pack dresses
+     * the result, and the shape is cut last. Turning the hands after either of the other two would
+     * be moving artwork underneath a mask that was cut to where it used to be.
+     */
+    fun clockIcon(activity: LauncherActivityInfo, user: UserHandle): Bitmap? {
+        val layers = clockLayersFor(activity) ?: return null
+        val component = activity.componentName
+
+        // An icon the user picked by hand, or one the pack drew itself, has replaced the artwork
+        // outright. Whatever it is a picture of, it has no layers left that mean anything, and
+        // taking it back off the user because the app happens to be a clock would be wrong twice.
+        if (hasCustomIcons && CustomIcons.has(context, component)) return null
+        val pack = iconPack
+        if (pack != null && pack.themes(component)) return null
+
+        val source = ClockIcons.sourceFor(context, activity, layers, iconDensity) ?: return null
+        val turned = IconShaper.rotateClock(
+            context.resources,
+            source,
+            ClockIcons.rotationNow(layers),
+            iconSizePx,
+        )
+
+        // A pack with a background, mask and overlay dresses the clock the same way it dresses any
+        // app it has no entry for. It composes over a rendering, so the hands have to be flat by
+        // this point - which they are, because they were turned a step ago.
+        if (pack != null && pack.canCompose()) {
+            val flat = IconShaper.shape(turned, IconShape.SYSTEM, iconSizePx)
+            pack.compose(BitmapDrawable(context.resources, flat), iconSizePx)?.let {
+                return IconShaper.shape(it, iconShape, iconSizePx)
+            }
+        }
+
+        return IconShaper.shape(turned, iconShape, iconSizePx)
+    }
+
     fun clear() {
         baseCache.evictAll()
         themedCache.evictAll()
@@ -234,6 +334,11 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
         }
         for (key in themedCache.snapshot().keys) {
             if (key.component.packageName == packageName) themedCache.remove(key)
+        }
+        // An update can add the clock metadata to an app that did not declare it, or take it away,
+        // so the remembered answer goes with the icons it was an answer about.
+        synchronized(clockLayers) {
+            clockLayers.keys.removeAll { it.packageName == packageName }
         }
     }
 

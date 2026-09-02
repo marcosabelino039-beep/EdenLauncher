@@ -42,6 +42,16 @@ object WidgetBinding {
             .getOrDefault(emptyList())
     }
 
+    /**
+     * The installed provider called [provider], or null when no app on the phone offers it.
+     *
+     * Used to tell a widget that can be brought back from one that cannot: a stored widget with no
+     * live id is repairable exactly when its provider is still installed. Scans the provider list,
+     * so it is called when a placeholder is built and not on any hot path.
+     */
+    fun providerNamed(context: Context, provider: ComponentName): AppWidgetProviderInfo? =
+        installedProviders(context).firstOrNull { it.provider == provider }
+
     /** The provider bound to [appWidgetId], or null if nothing is bound to it. */
     fun providerFor(context: Context, appWidgetId: Int): AppWidgetProviderInfo? =
         AppWidgetManager.getInstance(context)?.getAppWidgetInfo(appWidgetId)

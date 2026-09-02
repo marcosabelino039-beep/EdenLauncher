@@ -69,6 +69,33 @@ class LauncherAppWidgetHost(context: Context) : AppWidgetHost(context, HOST_ID) 
             .onFailure { EdenLog.w(TAG, "deleteAppWidgetId($appWidgetId) failed", it) }
     }
 
+    /**
+     * Releases every id this host owns that nothing in the database refers to any more.
+     *
+     * Ids leak in ways no single call site can catch: a page deleted with a widget on it, a stack
+     * torn down, a restore that replaced the whole workspace, a crash between allocating an id and
+     * writing the row that names it. Each of those is handled where it happens, but a launcher only
+     * finds out about the ones that were not by asking the system what it still holds and comparing
+     * that against what it still uses.
+     *
+     * Run once per load. [inUse] must be every id the database mentions - passing a partial set
+     * would release ids belonging to widgets that are on screen.
+     */
+    fun pruneOrphanIds(inUse: Set<Int>): Int {
+        val owned = runCatching { appWidgetIds }
+            .onFailure { EdenLog.w(TAG, "could not list allocated widget ids", it) }
+            .getOrNull() ?: return 0
+
+        var released = 0
+        for (id in owned) {
+            if (id in inUse) continue
+            releaseWidgetId(id)
+            released++
+        }
+        if (released > 0) EdenLog.i(TAG, "released $released orphaned widget id(s)")
+        return released
+    }
+
     private companion object {
         /**
          * Kept at AOSP Launcher3's value. Host ids are scoped to the package, so this collides with

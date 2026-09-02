@@ -5,8 +5,10 @@ import app.auriel.edenlauncher.model.Containers
 import app.auriel.edenlauncher.model.FolderInfo
 import app.auriel.edenlauncher.model.ItemInfo
 import app.auriel.edenlauncher.model.ItemType
+import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
 import app.auriel.edenlauncher.model.NO_ID
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.model.WidgetStackInfo
 import app.auriel.edenlauncher.util.EdenLog
 import app.auriel.edenlauncher.util.UserCache
 import kotlinx.coroutines.CoroutineDispatcher
@@ -45,7 +47,7 @@ class LauncherRepository(
         // the folder's own row and leave its children behind, and those rows are unreachable: they
         // are not on a page, not in the dock, and the folder they name does not exist. Left alone
         // they are carried forward forever.
-        val orphans = dao.deleteOrphans(ROOT_CONTAINERS, ItemType.FOLDER.code)
+        val orphans = dao.deleteOrphans(ROOT_CONTAINERS, CONTAINER_TYPES)
         if (orphans > 0) EdenLog.i(TAG, "swept $orphans row(s) whose folder no longer exists")
 
         val rows = dao.loadFavorites()
@@ -53,25 +55,44 @@ class LauncherRepository(
         // Rows are converted once. Folder children are held aside because a child can be read
         // before its folder; they are attached in a second pass over that much smaller list.
         val folders = LongSparseArray<FolderInfo>()
+        val stacks = LongSparseArray<WidgetStackInfo>()
         val workspace = ArrayList<ItemInfo>(rows.size)
         val hotseat = ArrayList<ItemInfo>(8)
         val pendingFolderChildren = ArrayList<ShortcutInfo>()
+        val pendingStackChildren = ArrayList<LauncherAppWidgetInfo>()
 
         for (row in rows) {
             val item = row.toItemInfo(users) ?: continue
             if (item is FolderInfo) folders.put(item.id, item)
+            if (item is WidgetStackInfo) stacks.put(item.id, item)
             when (item.container) {
                 Containers.DESKTOP -> workspace.add(item)
                 Containers.HOTSEAT -> hotseat.add(item)
-                else -> if (item is ShortcutInfo) pendingFolderChildren.add(item)
+                // A child of a folder or of a widget stack. Which one it is follows from what the
+                // child is: only shortcuts go in folders and only widgets go in stacks.
+                else -> when (item) {
+                    is ShortcutInfo -> pendingFolderChildren.add(item)
+                    is LauncherAppWidgetInfo -> pendingStackChildren.add(item)
+                    else -> Unit
+                }
             }
         }
 
         for (child in pendingFolderChildren) {
             folders.get(child.container)?.contents?.add(child)
         }
+        for (child in pendingStackChildren) {
+            stacks.get(child.container)?.contents?.add(child)
+        }
         for (i in 0 until folders.size()) {
             folders.valueAt(i).contents.sortBy { it.rank }
+        }
+        for (i in 0 until stacks.size()) {
+            val stack = stacks.valueAt(i)
+            stack.contents.sortBy { it.rank }
+            // The stack owns the block; a child that came back with a stale span from before a
+            // resize would be measured wrong on the very first layout.
+            stack.applySpanToContents()
         }
 
         hotseat.sortBy { it.rank }
@@ -96,9 +117,40 @@ class LauncherRepository(
         dao.updateFavorites(items.map { it.toEntity(users, stamp) })
     }
 
-    suspend fun deleteItem(item: ItemInfo) = withContext(io) {
-        if (item is FolderInfo) dao.deleteFolderAndContents(item.id) else dao.deleteFavoriteById(item.id)
+    /**
+     * Deletes [item], and everything inside it when it is a folder or a widget stack.
+     *
+     * Returns the widget ids that went with it, which the caller has to hand back to the
+     * `AppWidgetHost`. The repository cannot do that itself - the host belongs to the activity -
+     * and an id whose row is gone but which is never released is leaked for the life of the
+     * install, with its provider still being woken for a widget nobody can see.
+     */
+    suspend fun deleteItem(item: ItemInfo): List<Int> = withContext(io) {
+        when (item) {
+            is FolderInfo -> {
+                dao.deleteContainerAndContents(item.id)
+                emptyList()
+            }
+
+            is WidgetStackInfo -> {
+                val ids = dao.widgetIdsInContainer(item.id)
+                dao.deleteContainerAndContents(item.id)
+                ids
+            }
+
+            else -> {
+                dao.deleteFavoriteById(item.id)
+                if (item is LauncherAppWidgetInfo && item.appWidgetId >= 0) {
+                    listOf(item.appWidgetId)
+                } else {
+                    emptyList()
+                }
+            }
+        }
     }
+
+    /** Every widget id the workspace still refers to. Anything else the host owns is an orphan. */
+    suspend fun widgetIdsInUse(): Set<Int> = withContext(io) { dao.allWidgetIds().toSet() }
 
     // ---- screens ---------------------------------------------------------------------------
 
@@ -110,8 +162,11 @@ class LauncherRepository(
         dao.insertScreen(WorkspaceScreenEntity(screenRank = rank, modified = now()))
     }
 
-    suspend fun removeScreen(screenId: Long) = withContext(io) {
-        dao.deleteScreenWithContents(screenId, Containers.DESKTOP, ItemType.FOLDER.code)
+    /** Removes a page and everything on it; returns the widget ids that went with it. */
+    suspend fun removeScreen(screenId: Long): List<Int> = withContext(io) {
+        val widgetIds = dao.widgetIdsOnScreen(Containers.DESKTOP, screenId, CONTAINER_TYPES)
+        dao.deleteScreenWithContents(screenId, Containers.DESKTOP, CONTAINER_TYPES)
+        widgetIds
     }
 
     /** Persists a new page order; [screenIds] is the full list, left to right. */
@@ -141,7 +196,10 @@ class LauncherRepository(
     private companion object {
         const val TAG = "LauncherRepository"
 
-        /** Containers that are not rows: the desktop and the dock. Everything else is a folder. */
+        /** Containers that are not rows: the desktop and the dock. */
         val ROOT_CONTAINERS = listOf(Containers.DESKTOP, Containers.HOTSEAT)
+
+        /** Item kinds whose row id can legitimately appear as another row's `container`. */
+        val CONTAINER_TYPES = listOf(ItemType.FOLDER.code, ItemType.WIDGET_STACK.code)
     }
 }

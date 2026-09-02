@@ -1,5 +1,6 @@
 package app.auriel.edenlauncher.icons
 
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -12,6 +13,7 @@ import android.graphics.RectF
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.graphics.drawable.LayerDrawable
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -99,6 +101,89 @@ object IconShaper {
 
         maskInPlace(canvas, shape, size)
         return output
+    }
+
+    // ---- clock hands -----------------------------------------------------------------------------
+
+    /**
+     * Returns [drawable] with its clock-hand layers turned to [rotation], ready to be shaped.
+     *
+     * A drawable rather than a bitmap comes back on purpose, and it is the reason this is a
+     * separate step rather than an argument to [shape]. The order the three layers of the pipeline
+     * run in is raw, then pack, then shape, and the hands belong at the very front of it: a shape
+     * cut first would be a mask over artwork that then moves underneath it, and a pack composed
+     * first would have dressed up a clock that is showing the wrong time. So this turns the hands
+     * and hands the result back, still a drawable, for the rest of the pipeline to work on exactly
+     * as it works on anything else.
+     *
+     * For an adaptive icon the turned foreground is rebuilt into another [AdaptiveIconDrawable],
+     * which keeps the background and foreground separate all the way through - so a shape is still
+     * cut from the layers rather than recovered from a bitmap the platform has already masked, and
+     * [shapeAdaptive] needs to know nothing about clocks.
+     *
+     * Anything that is not a layer list has no hands to turn and comes back untouched.
+     */
+    fun rotateClock(
+        resources: Resources,
+        drawable: Drawable,
+        rotation: ClockRotation,
+        size: Int,
+    ): Drawable {
+        if (size <= 0) return drawable
+
+        if (drawable is AdaptiveIconDrawable) {
+            val foreground = drawable.foreground as? LayerDrawable ?: return drawable
+
+            // Setting the parent's bounds is what lays the foreground out over the full 108 units;
+            // the layers are then turned in that oversized space and captured there, so feeding the
+            // capture back to a new adaptive icon reproduces the geometry exactly.
+            drawable.setBounds(0, 0, size, size)
+            val layout = Rect(foreground.bounds)
+            if (layout.isEmpty) return drawable
+
+            val turned = Bitmap.createBitmap(layout.width(), layout.height(), Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(turned)
+            canvas.translate(-layout.left.toFloat(), -layout.top.toFloat())
+            drawTurned(canvas, foreground, rotation, layout.exactCenterX(), layout.exactCenterY())
+
+            return AdaptiveIconDrawable(drawable.background, BitmapDrawable(resources, turned))
+        }
+
+        if (drawable is LayerDrawable) {
+            drawable.setBounds(0, 0, size, size)
+            val turned = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            drawTurned(Canvas(turned), drawable, rotation, size / 2f, size / 2f)
+            return BitmapDrawable(resources, turned)
+        }
+
+        return drawable
+    }
+
+    /**
+     * Draws every layer, turning the ones [rotation] names about ([centreX], [centreY]).
+     *
+     * The layers already carry the bounds their parent gave them, so nothing here lays anything
+     * out - a hand is drawn where it was drawn before, with the canvas turned under it.
+     */
+    private fun drawTurned(
+        canvas: Canvas,
+        layers: LayerDrawable,
+        rotation: ClockRotation,
+        centreX: Float,
+        centreY: Float,
+    ) {
+        for (i in 0 until layers.numberOfLayers) {
+            val layer = layers.getDrawable(i) ?: continue
+            val degrees = rotation.degreesFor(i)
+            if (degrees == 0f) {
+                layer.draw(canvas)
+                continue
+            }
+            canvas.save()
+            canvas.rotate(degrees, centreX, centreY)
+            layer.draw(canvas)
+            canvas.restore()
+        }
     }
 
     /** Scales the artwork to cover the shape, then cuts the shape out of it. */

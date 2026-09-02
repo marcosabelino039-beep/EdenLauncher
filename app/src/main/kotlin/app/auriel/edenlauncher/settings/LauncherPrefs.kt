@@ -328,6 +328,18 @@ class LauncherPrefs(context: Context) {
     }.distinctUntilChanged()
 
     companion object {
+        /**
+         * The backing preference file, for the one caller that has to treat settings as data rather
+         * than as named values.
+         *
+         * Backup walks every stored key without knowing what any of them mean - that is what lets a
+         * setting added next month be backed up without anyone remembering to add it here, and it
+         * is why app renames need no records of their own. Everything else on this class is a typed
+         * property, and should stay that way.
+         */
+        fun file(context: Context): SharedPreferences =
+            context.getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
+
         /** Grid value meaning "decide from the screen size". */
         const val AUTO = 0
 

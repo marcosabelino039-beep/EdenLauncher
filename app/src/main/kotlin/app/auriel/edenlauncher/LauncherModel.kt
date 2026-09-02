@@ -259,6 +259,85 @@ class LauncherModel(
         changed
     }
 
+    // ---- clocks ----------------------------------------------------------------------------------
+
+    /** The bound items whose apps draw their icon as a clock. Usually none, occasionally one. */
+    class ClockItems(val placed: List<ShortcutInfo>, val apps: List<AppInfo>) {
+        val isEmpty: Boolean get() = placed.isEmpty() && apps.isEmpty()
+        val size: Int get() = placed.size + apps.size
+    }
+
+    /**
+     * Finds the clock apps among what has just been bound.
+     *
+     * This is the expensive half of clock support and the reason it is a pass of its own: deciding
+     * whether an app is a clock means asking the package manager for its metadata, once per app.
+     * The answers are remembered - including "no", which is nearly all of them - so this is paid
+     * once per process rather than once per rebind, and it must run after the home screen is on
+     * screen, never during a load.
+     *
+     * The drawer list is the one that gets asked, because it is every app there is; the placed
+     * items are then filtered against what it found rather than asked again.
+     */
+    suspend fun findClocks(placed: List<ShortcutInfo>, apps: List<AppInfo>): ClockItems =
+        withContext(io) {
+            val started = android.os.SystemClock.uptimeMillis()
+
+            val clockApps = ArrayList<AppInfo>(2)
+            val clockComponents = HashSet<ComponentName>(2)
+            for (app in apps) {
+                val component = app.componentName ?: continue
+                val activity = activityCache[ComponentKey(component, app.user)] ?: continue
+                if (iconCache.clockLayersFor(activity) == null) continue
+                clockApps.add(app)
+                clockComponents.add(component)
+            }
+
+            val clockPlaced = if (clockComponents.isEmpty()) {
+                emptyList()
+            } else {
+                placed.filter { it.targetComponent in clockComponents }
+            }
+
+            EdenLog.i(
+                TAG,
+                "clock scan: ${clockApps.size} of ${apps.size} apps in " +
+                    "${android.os.SystemClock.uptimeMillis() - started}ms",
+            )
+            ClockItems(clockPlaced, clockApps)
+        }
+
+    /**
+     * Redraws [clocks] with their hands at the current time.
+     *
+     * Cheap by design - it renders a handful of icons, never hundreds - because it runs once a
+     * minute for as long as the launcher is the thing on screen.
+     *
+     * @return true when anything actually changed, which is the caller's cue to redraw. An app
+     *   whose icon a pack or the user replaced has no hands to turn and reports nothing.
+     */
+    suspend fun refreshClocks(clocks: ClockItems): Boolean = withContext(io) {
+        var changed = false
+
+        for (item in clocks.placed) {
+            val component = item.targetComponent ?: continue
+            val activity = activityCache[ComponentKey(component, item.user)] ?: continue
+            val icon = iconCache.clockIcon(activity, item.user) ?: continue
+            item.icon = icon
+            changed = true
+        }
+
+        for (app in clocks.apps) {
+            val component = app.componentName ?: continue
+            val activity = activityCache[ComponentKey(component, app.user)] ?: continue
+            val icon = iconCache.clockIcon(activity, app.user) ?: continue
+            app.icon = icon
+            changed = true
+        }
+
+        changed
+    }
+
     /**
      * First-run layout: the dock is filled with the handset staples, and the first workspace page
      * is left clear so the wallpaper is visible. Everything else lives in the drawer.

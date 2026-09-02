@@ -183,7 +183,58 @@ permission prompt to be told at the end that there is nowhere to put it.
 
 **Touch.** A widget is a foreign view hierarchy that consumes everything.
 `LauncherAppWidgetHostView` detects the long press above the widget's own children and sends them a
-cancel when it fires. Without that, a widget containing a button can never be picked up.
+cancel when it fires. Without that, a widget containing a button can never be picked up. The host
+view also consumes every gesture its own children ignored, as AOSP's does. Consuming only from the
+long press onwards leaves the workspace as the touch target for any press that lands on a widget's
+empty space, and a press-and-drag on a widget is then read by the pager as a swipe rather than by
+the launcher as a drag. Consuming takes nothing away from the workspace: a parent's
+`onInterceptTouchEvent` runs before its children on every event, which is how paging, the drawer
+flick and the drag layer all still get their chance.
+
+**Who owns a vertical drag.** A widget containing a list has to be able to scroll it, and the flick
+that opens the drawer must not read the same drag. That is settled by asking rather than by
+claiming: `LauncherAppWidgetHostView` publishes `hasScrollableContent`, recomputed on every layout,
+and `Workspace` asks whatever is under the finger - once, on the way down, through
+`View.canScrollDeeply` - whether it can still scroll upward before treating an upward drag as the
+drawer. A `WidgetStackView` answers the same question by reporting that it takes vertical drags.
+
+`requestDisallowInterceptTouchEvent` is deliberately **not** used for this, and the reason is worth
+keeping: that flag reaches every ancestor, and one of those ancestors is the drag layer, which is
+where a long press is turned into a drag (`DragController.onInterceptTouchEvent` promotes the
+pending drag). A view that asks for it can never be picked up again - and because the gesture then
+falls through to the workspace, dragging such a widget opens the app drawer instead.
+
+**Corners and padding.** Providers draw square backgrounds and declare their own padding, both
+authored for a launcher that is not this one. `RoundedCorners` (ported from AOSP 14's
+`RoundedCornerEnforcement`, by way of the Lawnchair checkout in `.ref/`) finds the widget's real
+background view and clips to *its* rectangle rather than to the host view's, because the background
+is usually inset and clipping the outer box leaves the inner square corners showing. A widget that
+has already rounded itself - a clipped `android.R.id.background` at the root, which is the contract
+Android 12 introduced - is left alone. The provider's padding is dropped: the launcher owns the
+space between cells.
+
+**Frames the user is watching.** Applying RemoteViews is the most expensive thing that happens to a
+widget, so updates are held back for the length of a drag or a flick through a stack and the last
+one is applied when the gesture ends. A provider whose views throw during `updateAppWidget` or
+`onLayout` is caught and shown as the error tile: that is the provider's bug, and it must not be the
+launcher's crash.
+
+**Leaked ids.** Every path that abandons an add releases its id, but ids also go missing in ways no
+single call site sees - a page deleted with a widget on it, a stack torn down, a restore that
+replaced the whole workspace, a kill between allocating an id and writing the row that names it. So
+once per load the launcher asks the host what it still holds, compares that against every
+`appWidgetId` in the database, and hands back the difference.
+
+**Widgets that come back.** A widget id belongs to one install of one launcher, which is why a
+backup carries the provider and the geometry but never the id - and why every widget in a restored
+workspace arrives unbound. Those draw as a placeholder that says so and offers to repair itself:
+tapping it runs the ordinary bind, permission prompt and configuration screen included, and the
+widget returns to the cells it left at the size it was. A placeholder whose provider is *not*
+installed says that instead and offers nothing, because there is nothing to offer.
+
+**Settings after the fact.** A provider's configuration activity is normally run once, on the way
+in, and is unreachable afterwards - which is where "I cannot change what my widget shows" comes
+from. The long-press menu offers it again for any placed widget whose provider declares one.
 
 **Resizing.** `WidgetResizeFrame` lives in the drag layer, not the page, so handles can be drawn
 outside the widget's cell without being clipped. Resizing snaps to whole cells - a widget that can
@@ -191,8 +242,52 @@ sit between cells is a widget that can overlap an icon - and every candidate siz
 the page's occupancy before it is applied. The widget's own cells are released from that occupancy
 while the frame is up, or every candidate overlapping where it already is would be rejected.
 
+### Stacks
+
+Several widgets in one block of the grid, one on top, changed with a swipe up or down. A stack is
+to widgets what a folder is to icons, with the one difference that decides the design: a folder
+opens and a stack does not. Four widgets cost four cells instead of sixteen, and the one you want is
+a gesture away rather than a tap, a look, and a tap back.
+
+Modelled the way a folder is: `WidgetStackInfo` is a row of its own that holds the cells, and its
+children are ordinary widget rows whose `container` is that row's id and whose `rank` is their depth
+in the pile. That reuses the loader, the orphan sweep and the page delete rather than adding a
+second kind of nesting; `ItemType.WIDGET_STACK` is code 100, because everything below that belongs
+to AOSP Launcher3 and it goes on adding to them.
+
+Which widget is on top is part of the arrangement, so it is persisted - in `options`, the column
+folders keep their flags in, and deliberately not in `rank`, which every drop onto the desktop
+rewrites to zero and which would reset the pile each time it was moved.
+
+**Why vertical.** Horizontal belongs to the workspace. Up and down are free on a page: the only
+other vertical gesture is the flick that opens the drawer, and that has to travel much further than
+the touch slop the stack claims at.
+
+**Who wins a contested gesture.** Three parties want the same finger. A widget that can still
+scroll in the direction being dragged keeps it - a list you have not finished scrolling is not a
+stack you are trying to turn - and once it reaches its end the next swipe turns the pile, which is
+the handover people already expect from nested scrolling. Otherwise the stack claims at the touch
+slop, before the workspace has decided anything. Everything else, horizontal included, goes to the
+workspace. Inside a stack a widget gives up one thing only: its long press, because the pile is what
+gets dragged and two timers on one press would race to decide which. Its scrolling is left alone -
+the stack asks about that on every swipe.
+
+**Making and unmaking one.** Dropping a widget on another widget stacks the pair - the same gesture
+that makes a folder out of two icons - and dropping one on a stack joins it. The stack's own menu
+adds a widget straight from the picker, which is the route that still works when the home screen has
+no free cells left. Taking the top one out puts it back on the page, and a stack with one widget left
+collapses into a plain widget: a pile of one draws an indicator it does not need and eats swipes that
+cannot go anywhere.
+
+**Size.** A stack is one block, so every child is shown at the stack's span and is resized with it.
+Its resize limits are the strictest of its children's - as small as the largest minimum, as large as
+the smallest maximum - and a widget that could not render the stack's size is refused at the drop
+rather than added broken. Eight is the ceiling: every widget in a stack is live whether or not it is
+showing, because the system pushes its provider's updates at the host either way.
+
 **No migration was needed.** `favorites` has carried `appWidgetId`, `appWidgetProvider`, `spanX`,
-`spanY`, and `restored` since Phase 1. Widgets stored before hosting existed come back bound.
+`spanY`, `restored` and `options` since Phase 1, and a stack is a row with a container id exactly as
+a folder is. Widgets stored before hosting existed come back bound.
 
 `Workspace.viewInfo` falls back to the view's tag. A host view belongs to the provider and cannot be
 given a typed field, so it carries its `ItemInfo` as a tag - which is what AOSP does for every

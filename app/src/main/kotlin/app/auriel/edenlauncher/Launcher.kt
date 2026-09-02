@@ -3,7 +3,10 @@ package app.auriel.edenlauncher
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +31,7 @@ import app.auriel.edenlauncher.model.ItemInfo
 import app.auriel.edenlauncher.model.ItemType
 import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.model.WidgetStackInfo
 import app.auriel.edenlauncher.settings.LauncherPrefs
 import app.auriel.edenlauncher.settings.SettingsActivity
 import app.auriel.edenlauncher.util.EdenLog
@@ -44,6 +48,7 @@ import app.auriel.edenlauncher.widget.WidgetPickerActivity
 import app.auriel.edenlauncher.widget.WidgetPlaceholderView
 import app.auriel.edenlauncher.widget.WidgetResizeFrame
 import app.auriel.edenlauncher.widget.WidgetSizes
+import app.auriel.edenlauncher.widget.WidgetStackView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -53,6 +58,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The home activity.
@@ -105,6 +111,34 @@ class Launcher : Activity(), ItemPlacementHandler {
     /** The icon pack being applied over an already-bound home screen. See [applyIconTheme]. */
     private var iconThemeJob: Job? = null
 
+    /** The bound items that draw a clock, once the scan has found them. Null until it has. */
+    private var clockItems: LauncherModel.ClockItems? = null
+
+    /** The scan for clock apps, and the redraw it feeds. Both belong to the current bind. */
+    private var clockScanJob: Job? = null
+    private var clockTickJob: Job? = null
+
+    /**
+     * True between [onStart] and [onStop].
+     *
+     * The minute tick is delivered whether or not the launcher is the thing on screen, and
+     * redrawing icons nobody is looking at is the exact kind of background cost this project exists
+     * to not have. The receiver is only registered while started, and this is the belt to that
+     * braces: a tick already in flight when the launcher stops does nothing when it lands.
+     */
+    private var isStarted = false
+
+    /**
+     * The minute hand moving, the user setting the clock, and the phone crossing a timezone.
+     *
+     * Registered here rather than in the manifest because it has to be: [Intent.ACTION_TIME_TICK]
+     * has not been deliverable to a manifest receiver since Android 8, and the system drops it
+     * without saying so. A manifest entry for it looks right, compiles, installs, and never fires.
+     */
+    private val timeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = refreshClocks()
+    }
+
     /**
      * The folder a drag started inside, so the item can be taken out of it wherever it lands.
      *
@@ -136,6 +170,18 @@ class Launcher : Activity(), ItemPlacementHandler {
      * never reclaimed by the system.
      */
     private var pendingWidgetId = LauncherAppWidgetInfo.NO_WIDGET_ID
+
+    /**
+     * The stored widget being bound back to a live id, if the flow now running is a restore.
+     *
+     * A restore walks the same three steps as an add, but ends differently: the row already exists,
+     * with its page, its cells and its size, and only the id is missing. Held here so the result
+     * that comes back from the system knows which of the two it is finishing.
+     */
+    private var pendingRestore: LauncherAppWidgetInfo? = null
+
+    /** The stack a widget being added from the picker should join, if it is joining one. */
+    private var pendingStackTarget: WidgetStackInfo? = null
 
     /**
      * Apps appearing and disappearing while the launcher is alive.
@@ -389,7 +435,7 @@ class Launcher : Activity(), ItemPlacementHandler {
         }
         workspace.bindOverviewCallbacks(appState.preferences.defaultScreenId)
         scope.launch {
-            appState.repository.removeScreen(screenId)
+            for (id in appState.repository.removeScreen(screenId)) widgetHost.releaseWidgetId(id)
             appState.repository.reorderScreens(workspace.screenIds)
             // The home page just went away; fall back to the leftmost one.
             if (appState.preferences.defaultScreenId == screenId) {
@@ -497,6 +543,24 @@ class Launcher : Activity(), ItemPlacementHandler {
         binding.workspace.setCurrentPage(page.coerceIn(0, lastPage))
 
         applyIconTheme(results)
+        scanForClocks(results)
+        pruneWidgetIds()
+    }
+
+    /**
+     * Hands back every widget id the workspace no longer refers to.
+     *
+     * Ids leak in ways the site that lost them cannot always catch - a page deleted with a widget
+     * on it, a stack torn down, a restore that replaced the whole workspace, a kill between
+     * allocating an id and writing the row that names it. Each of those releases what it knows
+     * about; this is the sweep that finds the rest, once per load, against the database as it
+     * actually stands.
+     */
+    private fun pruneWidgetIds() {
+        scope.launch {
+            val inUse = appState.repository.widgetIdsInUse()
+            withContext(Dispatchers.IO) { widgetHost.pruneOrphanIds(inUse) }
+        }
     }
 
     // ---- icon theming ----------------------------------------------------------------------------
@@ -580,6 +644,83 @@ class Launcher : Activity(), ItemPlacementHandler {
         }
     }
 
+    // ---- clock icons -----------------------------------------------------------------------------
+
+    /**
+     * Finds the clock apps among what was just bound, then draws them at the right time.
+     *
+     * A pass of its own, after the pack's, for the same reason the pack's is a pass of its own:
+     * asking the package manager whether each installed app declares clock metadata is a few
+     * hundred calls, and a few hundred calls belong behind a home screen the user can already use
+     * rather than in front of one they cannot. It waits for the pack to finish first so the two are
+     * not competing for the same core on a phone that only has two of them.
+     */
+    private fun scanForClocks(results: LauncherModel.LoaderResults) {
+        // A rebind supersedes the scan the one before it started: those are not the items on
+        // screen any more, and the tick pass must not keep redrawing them.
+        clockScanJob?.cancel()
+        clockTickJob?.cancel()
+        clockItems = null
+
+        clockScanJob = scope.launch {
+            iconThemeJob?.join()
+
+            val placed = ArrayList<ShortcutInfo>(32)
+            collectShortcuts(results.workspaceItems, placed)
+            collectShortcuts(results.hotseatItems, placed)
+
+            val found = appState.model.findClocks(placed, results.allApps)
+            if (found.isEmpty) return@launch
+
+            clockItems = found
+            EdenLog.i(TAG, "watching ${found.size} clock icons")
+            refreshClocks()
+        }
+    }
+
+    /**
+     * Redraws the clock icons with their hands where they belong now.
+     *
+     * Called on every minute tick, on a clock or timezone change, and on coming back to the
+     * foreground - that last one because a launcher that has been in the background for a while
+     * missed the ticks that happened while it was there, and its clocks would otherwise sit at the
+     * time the user left until the next minute turned over.
+     *
+     * Does nothing at all until the scan has found a clock, so a phone whose clock app is not one
+     * of the ones that ship a layered icon never runs any of this.
+     */
+    private fun refreshClocks() {
+        val clocks = clockItems ?: return
+        if (!isStarted) return
+
+        clockTickJob?.cancel()
+        clockTickJob = scope.launch {
+            if (!appState.model.refreshClocks(clocks)) return@launch
+            if (clocks.placed.isNotEmpty()) refreshPlacedIcons()
+            if (clocks.apps.isNotEmpty()) allApps.refreshIcons()
+        }
+    }
+
+    private fun startWatchingTime() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(timeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(timeReceiver, filter)
+        }
+    }
+
+    private fun stopWatchingTime() {
+        // Symmetric with the register above, but defensively: unregistering a receiver that was
+        // never registered is an IllegalArgumentException, and the one thing worse than a clock
+        // that does not tick is a launcher that crashes on the way to the background.
+        runCatching { unregisterReceiver(timeReceiver) }
+    }
+
     /**
      * Something was installed, updated, or uninstalled.
      *
@@ -651,6 +792,8 @@ class Launcher : Activity(), ItemPlacementHandler {
 
         is LauncherAppWidgetInfo -> createWidgetView(item)
 
+        is WidgetStackInfo -> createWidgetStackView(item)
+
         else -> null
     }
 
@@ -660,11 +803,15 @@ class Launcher : Activity(), ItemPlacementHandler {
      * A hosted widget, or the placeholder when it cannot be hosted right now.
      *
      * The placeholder is not dead code: a widget whose provider has been uninstalled, or whose id
-     * was never bound, still has a database row and a place on the grid. Drawing nothing there
-     * would look like the launcher had lost it, and the user would have no way to remove something
-     * they cannot see.
+     * was never bound - which is every widget in a restored backup, since ids belong to one install
+     * and are deliberately not carried over - still has a database row and a place on the grid.
+     * Drawing nothing there would look like the launcher had lost it, and the user would have no
+     * way to remove or repair something they cannot see.
+     *
+     * @param inStack true when the view is going into a [WidgetStackView]. A stacked widget gives
+     *   up its own long press: the pile is what gets dragged, not the widget showing on top of it.
      */
-    private fun createWidgetView(item: LauncherAppWidgetInfo): View {
+    private fun createWidgetView(item: LauncherAppWidgetInfo, inStack: Boolean = false): View {
         val providerInfo = if (item.appWidgetId >= 0) {
             WidgetBinding.providerFor(this, item.appWidgetId)
         } else {
@@ -672,10 +819,18 @@ class Launcher : Activity(), ItemPlacementHandler {
         }
 
         if (providerInfo == null) {
+            // An unbound id whose provider is installed is repairable; one whose provider is gone
+            // is not, and the two have to say different things.
+            val restorable = item.providerName?.let { WidgetBinding.providerNamed(this, it) } != null
             return WidgetPlaceholderView(this).apply {
-                applyFrom(item)
+                applyFrom(item, restorable)
                 tag = item
-                setOnLongClickListener { startDragFromWorkspace(this, item) }
+                onRestore = if (restorable) {
+                    { restoreWidget(item) }
+                } else {
+                    null
+                }
+                if (!inStack) setOnLongClickListener { startDragFromWorkspace(this, item) }
             }
         }
 
@@ -684,22 +839,49 @@ class Launcher : Activity(), ItemPlacementHandler {
             // The launcher's own views carry their model object in a typed field; a host view is
             // the provider's, so the tag is the only place to put it. See Workspace.viewInfo.
             tag = item
-            setOnLongClickListener { startDragFromWorkspace(this, item) }
-            // The host view is measured by the cell, and the provider needs telling in dp what it
-            // was actually given, or it picks a layout for the wrong size.
-            post {
-                if (width > 0 && height > 0) {
-                    WidgetSizes.applySize(this, this@Launcher, width, height)
-                }
-            }
+            if (!inStack) setOnLongClickListener { startDragFromWorkspace(this, item) }
+            // Told in dp what it was given, or the provider picks a layout for the wrong size.
+            // From the span rather than from the measured pixels, so both orientations go at once
+            // and the widget does not reinflate on every rotation.
+            WidgetSizes.applySpan(this, this@Launcher, item.spanX, item.spanY)
         }
     }
 
-    private fun openWidgetPicker() {
+    /**
+     * A pile of widgets sharing one block of the grid.
+     *
+     * The stack view holds live host views, one per child, and shows one at a time; see
+     * [WidgetStackView] for why the swipe is vertical and who wins a contested gesture. Everything
+     * the launcher owns is wired here: the long press that drags the whole block, and the write
+     * that remembers which widget was left facing the user.
+     */
+    private fun createWidgetStackView(stack: WidgetStackInfo): View {
+        val view = WidgetStackView(this)
+        view.tag = stack
+        view.bind(stack, stack.contents.map { createWidgetView(it, inStack = true) })
+        view.setOnLongClickListener { startDragFromWorkspace(view, stack) }
+        view.onVisibleIndexChanged = {
+            // Position only: the row is otherwise untouched, and this fires once per flick.
+            scope.launch { appState.repository.updateItem(stack) }
+        }
+        return view
+    }
+
+    /**
+     * Opens the picker.
+     *
+     * [into] names a stack the chosen widget should join instead of being given cells of its own.
+     * Remembered rather than passed through the picker: the trip out to the system's bind prompt
+     * and the provider's configuration screen can come back at any point, and the stack is the
+     * launcher's business the whole way.
+     */
+    private fun openWidgetPicker(into: WidgetStackInfo? = null) {
         exitOverview()
+        pendingStackTarget = into
         try {
             startActivityForResult(WidgetPickerActivity.intentFor(this), REQUEST_PICK_WIDGET)
         } catch (e: ActivityNotFoundException) {
+            pendingStackTarget = null
             Toast.makeText(this, R.string.activity_not_found, Toast.LENGTH_SHORT).show()
         }
     }
@@ -753,6 +935,22 @@ class Launcher : Activity(), ItemPlacementHandler {
     private fun placeWidget(appWidgetId: Int) {
         pendingWidgetId = LauncherAppWidgetInfo.NO_WIDGET_ID
 
+        // A restore is the same three steps with a different ending: the row is already on a page,
+        // at a size, and only wants its id back.
+        pendingRestore?.let { restoring ->
+            pendingRestore = null
+            completeRestore(restoring, appWidgetId)
+            return
+        }
+
+        // Chosen from the picker while a stack was open: it joins the pile rather than taking
+        // cells of its own.
+        pendingStackTarget?.let { stack ->
+            pendingStackTarget = null
+            addWidgetToStack(stack, appWidgetId)
+            return
+        }
+
         val providerInfo = WidgetBinding.providerFor(this, appWidgetId) ?: run {
             widgetHost.releaseWidgetId(appWidgetId)
             Toast.makeText(this, R.string.widget_bind_failed, Toast.LENGTH_SHORT).show()
@@ -793,43 +991,325 @@ class Launcher : Activity(), ItemPlacementHandler {
 
     /** Gives an allocated id back when the add is cancelled or fails part-way. */
     private fun abandonPendingWidget() {
+        pendingRestore = null
+        pendingStackTarget = null
         if (pendingWidgetId != LauncherAppWidgetInfo.NO_WIDGET_ID) {
             widgetHost.releaseWidgetId(pendingWidgetId)
             pendingWidgetId = LauncherAppWidgetInfo.NO_WIDGET_ID
         }
     }
 
-    /** Puts the resize handles around a placed widget. */
-    private fun startWidgetResize(info: LauncherAppWidgetInfo) {
+    /**
+     * Binds a stored widget to a fresh id, in the place it already occupies.
+     *
+     * This is what a restored backup needs. Widget ids are handed out by the system to one install
+     * and mean nothing to another, so an exported workspace deliberately carries the provider and
+     * the geometry but not the id, and every widget comes back as a placeholder. Tapping one runs
+     * the ordinary bind - permission prompt and configuration screen included - and the widget
+     * returns to the cells it left, at the size it was.
+     */
+    private fun restoreWidget(info: LauncherAppWidgetInfo) {
+        val provider = info.providerName ?: return
+        closeIconOptions()
+
+        // Whatever id the row is carrying is from another install, or from an allocation that never
+        // completed. Either way it names nothing now, and holding on to it only leaks it.
+        if (info.appWidgetId >= 0) widgetHost.releaseWidgetId(info.appWidgetId)
+
+        pendingRestore = info
+        bindWidget(provider)
+    }
+
+    /** Puts a freshly bound id onto the row that was waiting for one, and redraws it. */
+    private fun completeRestore(info: LauncherAppWidgetInfo, appWidgetId: Int) {
+        val providerInfo = WidgetBinding.providerFor(this, appWidgetId) ?: run {
+            widgetHost.releaseWidgetId(appWidgetId)
+            Toast.makeText(this, R.string.widget_bind_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        info.appWidgetId = appWidgetId
+        info.providerName = providerInfo.provider
+        info.restoreStatus = app.auriel.edenlauncher.model.WidgetRestoreStatus.RESTORE_COMPLETED
+
+        scope.launch {
+            appState.repository.updateItem(info)
+            replaceWidgetView(info)
+            EdenLog.i(TAG, "restored widget ${providerInfo.provider} as id $appWidgetId")
+        }
+    }
+
+    /**
+     * Swaps the view standing for [info] for a freshly built one, wherever it sits.
+     *
+     * A widget that has just been bound was a placeholder a moment ago, and a placeholder cannot
+     * become a host view - the two are different classes. Inside a stack the swap has to happen in
+     * place, at the same depth in the pile, or the order the user arranged is lost.
+     */
+    private fun replaceWidgetView(info: LauncherAppWidgetInfo) {
+        val stack = stackContaining(info)
+        if (stack != null) {
+            val view = findViewFor(stack) as? WidgetStackView ?: return
+            view.bind(stack, stack.contents.map { createWidgetView(it, inStack = true) })
+            return
+        }
+
+        val old = findViewFor(info) ?: return
+        val page = old.parent as? CellLayout ?: return
+        page.removeView(old)
+        val view = createWidgetView(info)
+        if (!binding.workspace.addInScreen(view, info)) rehomeItem(info, view)
+    }
+
+    // ---- widget stacks ---------------------------------------------------------------------------
+
+    /**
+     * Adds a freshly bound widget to an existing stack.
+     *
+     * The child takes the stack's cells and the stack's size. A stack is one block of the grid, so
+     * there is nothing to place and nothing to find room for - which is also why a stack is the one
+     * way to keep adding widgets to a home screen that has no space left on it.
+     */
+    private fun addWidgetToStack(stack: WidgetStackInfo, appWidgetId: Int) {
+        val providerInfo = WidgetBinding.providerFor(this, appWidgetId) ?: run {
+            widgetHost.releaseWidgetId(appWidgetId)
+            Toast.makeText(this, R.string.widget_bind_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (stack.contents.size >= WidgetStackInfo.MAX_CONTENTS) {
+            widgetHost.releaseWidgetId(appWidgetId)
+            Toast.makeText(this, R.string.widget_stack_full, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val info = LauncherAppWidgetInfo(appWidgetId, providerInfo.provider).apply {
+            title = providerInfo.loadLabel(packageManager)
+        }
+        stack.add(info)
+
+        scope.launch {
+            info.id = appState.repository.addItem(info)
+            appState.repository.updateItem(stack)
+            val view = findViewFor(stack) as? WidgetStackView ?: return@launch
+            view.addWidgetView(createWidgetView(info, inStack = true))
+            EdenLog.i(TAG, "added ${providerInfo.provider} to stack ${stack.id}")
+        }
+    }
+
+    /**
+     * Takes the widget on top of a stack back out onto the page the stack is standing on.
+     *
+     * Refused rather than half-done when the page is full: a widget that came out of a stack and
+     * then had nowhere to go would have to be dropped, and dropping a widget the user was in the
+     * middle of moving is not a recovery.
+     */
+    private fun unstackVisible(stack: WidgetStackInfo) {
+        closeIconOptions()
+        val widget = stack.visible ?: return
+        if (stack.contents.size <= 1) return
+
+        val cell = IntArray(2)
+        val screenId = binding.workspace.findFreeCell(
+            cell,
+            widget.spanX,
+            widget.spanY,
+            preferredScreenId = stack.screenId,
+        )
+        if (screenId < 0) {
+            Toast.makeText(this, R.string.widget_no_space, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val stackView = findViewFor(stack) as? WidgetStackView
+        stackView?.visibleView?.let { stackView.removeWidgetView(it) }
+        stack.remove(widget)
+
+        widget.container = Containers.DESKTOP
+        widget.screenId = screenId
+        widget.cellX = cell[0]
+        widget.cellY = cell[1]
+
+        scope.launch {
+            appState.repository.updateItem(widget)
+            appState.repository.updateItems(stack.contents)
+            appState.repository.updateItem(stack)
+
+            val view = createWidgetView(widget)
+            if (!binding.workspace.addInScreen(view, widget)) rehomeItem(widget, view)
+            collapseIfSingle(stack)
+        }
+    }
+
+    /**
+     * Turns a stack with one widget left in it back into a plain widget.
+     *
+     * A pile of one is a widget wearing a pile's clothes: it draws an indicator it does not need,
+     * it eats vertical swipes for a flick that cannot go anywhere, and it costs a database row for
+     * nothing. Folders collapse the same way when their last-but-one icon leaves.
+     */
+    private suspend fun collapseIfSingle(stack: WidgetStackInfo) {
+        if (stack.contents.size != 1) return
+        val widget = stack.contents.first()
+
+        widget.container = Containers.DESKTOP
+        widget.screenId = stack.screenId
+        widget.cellX = stack.cellX
+        widget.cellY = stack.cellY
+        widget.spanX = stack.spanX
+        widget.spanY = stack.spanY
+        stack.contents.clear()
+
+        findViewFor(stack)?.let { removeViewFromParent(it) }
+        appState.repository.updateItem(widget)
+        // The stack row goes, and only the stack row: its child has already moved out from under
+        // it, so the delete cannot take the widget with it.
+        appState.repository.deleteItem(stack)
+
+        val view = createWidgetView(widget)
+        if (!binding.workspace.addInScreen(view, widget)) rehomeItem(widget, view)
+        EdenLog.i(TAG, "stack ${stack.id} collapsed back to a single widget")
+    }
+
+    /** The widget whose own settings screen the options menu should offer, if there is one. */
+    private fun configurableWidget(info: ItemInfo): LauncherAppWidgetInfo? {
+        val widget = when (info) {
+            is WidgetStackInfo -> info.visible
+            is LauncherAppWidgetInfo -> info
+            else -> null
+        } ?: return null
+        if (widget.appWidgetId < 0) return null
+        val providerInfo = WidgetBinding.providerFor(this, widget.appWidgetId) ?: return null
+        return if (providerInfo.configure != null) widget else null
+    }
+
+    /** Reopens a placed widget's own configuration screen. */
+    private fun reconfigureWidget(widget: LauncherAppWidgetInfo) {
+        closeIconOptions()
+        val providerInfo = WidgetBinding.providerFor(this, widget.appWidgetId) ?: return
+        val started = WidgetBinding.startConfigureIfNeeded(
+            activity = this,
+            host = widgetHost,
+            appWidgetId = widget.appWidgetId,
+            info = providerInfo,
+            requestCode = REQUEST_RECONFIGURE_WIDGET,
+        )
+        if (!started) Toast.makeText(this, R.string.widget_configure_failed, Toast.LENGTH_SHORT).show()
+    }
+
+    /** The stack [widget] belongs to, if it is in one. */
+    private fun stackContaining(widget: LauncherAppWidgetInfo): WidgetStackInfo? {
+        if (widget.container < 0) return null
+        val workspace = binding.workspace
+        for (i in 0 until workspace.childCount) {
+            val page = workspace.getChildAt(i) as? CellLayout ?: continue
+            for (j in 0 until page.childCount) {
+                val info = Workspace.viewInfo(page.getChildAt(j)) as? WidgetStackInfo ?: continue
+                if (info.id == widget.container) return info
+            }
+        }
+        return null
+    }
+
+    /**
+     * Puts the resize handles around a placed widget or a stack of them.
+     *
+     * A stack resizes as one block. Its limits are the strictest of its children's - as small as
+     * the largest minimum and as large as the smallest maximum - because every widget in the pile
+     * is shown at the stack's size, and a size one of them cannot render is a size the stack cannot
+     * take.
+     */
+    private fun startWidgetResize(info: ItemInfo) {
         val view = findViewFor(info) ?: return
         val page = view.parent as? CellLayout ?: return
-        val providerInfo = WidgetBinding.providerFor(this, info.appWidgetId) ?: return
+        val profile = currentDeviceProfile()
+
+        val minSpan = IntArray(2)
+        val maxSpan = IntArray(2)
+        if (!resizeLimits(info, profile, minSpan, maxSpan)) return
 
         closeIconOptions()
-        val profile = currentDeviceProfile()
         val frame = resizeFrame ?: WidgetResizeFrame(this).also { resizeFrame = it }
         frame.attach(
             dragLayer = binding.dragLayer,
             widget = view,
             page = page,
-            minSpan = WidgetSizes.minSpan(providerInfo, profile),
-            maxSpan = WidgetSizes.maxSpan(providerInfo, profile),
+            minSpan = minSpan,
+            maxSpan = maxSpan,
         ) { cellX, cellY, spanX, spanY ->
             info.cellX = cellX
             info.cellY = cellY
             info.spanX = spanX
             info.spanY = spanY
-            WidgetSizes.applySize(
-                view as android.appwidget.AppWidgetHostView,
-                this,
-                spanX * page.cellWidth,
-                spanY * page.cellHeight,
-            )
-            scope.launch { appState.repository.updateItem(info) }
+
+            when (info) {
+                is WidgetStackInfo -> {
+                    info.applySpanToContents()
+                    for (i in 0 until (view as WidgetStackView).childCount) {
+                        val host = view.getChildAt(i) as? android.appwidget.AppWidgetHostView
+                            ?: continue
+                        WidgetSizes.applySpan(host, this, spanX, spanY)
+                    }
+                    scope.launch {
+                        appState.repository.updateItem(info)
+                        appState.repository.updateItems(info.contents)
+                    }
+                }
+
+                else -> {
+                    (view as? android.appwidget.AppWidgetHostView)?.let {
+                        WidgetSizes.applySpan(it, this, spanX, spanY)
+                    }
+                    scope.launch { appState.repository.updateItem(info) }
+                }
+            }
         }
 
         binding.dragLayer.activeResizeFrame = frame
         binding.dragLayer.onTouchOutsideResizeFrame = { closeResizeFrame() }
+    }
+
+    /**
+     * The smallest and largest this item may be, in cells. False when it cannot be resized at all.
+     *
+     * A provider that is not installed contributes nothing: its widget is a placeholder, and a
+     * placeholder in a stack must not veto a resize the live widgets could take.
+     */
+    private fun resizeLimits(
+        info: ItemInfo,
+        profile: app.auriel.edenlauncher.device.DeviceProfile,
+        outMin: IntArray,
+        outMax: IntArray,
+    ): Boolean {
+        val widgets = when (info) {
+            is WidgetStackInfo -> info.contents
+            is LauncherAppWidgetInfo -> listOf(info)
+            else -> return false
+        }
+
+        outMin[0] = 1
+        outMin[1] = 1
+        outMax[0] = profile.inv.numColumns
+        outMax[1] = profile.inv.numRows
+
+        var resizable = false
+        for (widget in widgets) {
+            val providerInfo = WidgetBinding.providerFor(this, widget.appWidgetId) ?: continue
+            if (!WidgetSizes.isResizable(providerInfo)) continue
+            resizable = true
+            val min = WidgetSizes.minSpan(providerInfo, profile)
+            val max = WidgetSizes.maxSpan(providerInfo, profile)
+            outMin[0] = maxOf(outMin[0], min[0])
+            outMin[1] = maxOf(outMin[1], min[1])
+            outMax[0] = minOf(outMax[0], max[0])
+            outMax[1] = minOf(outMax[1], max[1])
+        }
+
+        if (!resizable) return false
+        // A pile whose limits crossed has no size every widget in it accepts; the current one is
+        // the only one known to work, so it stays.
+        outMax[0] = maxOf(outMax[0], outMin[0])
+        outMax[1] = maxOf(outMax[1], outMin[1])
+        return true
     }
 
     /** Takes the resize handles away. Returns true when there were any, so back can consume it. */
@@ -908,12 +1388,31 @@ class Launcher : Activity(), ItemPlacementHandler {
 
         // Only offered for a widget whose provider says it can be resized at all. A fixed-size
         // widget with handles that refuse to move is worse than no handles.
-        if (info is LauncherAppWidgetInfo) {
-            val providerInfo = WidgetBinding.providerFor(this, info.appWidgetId)
+        if (info is LauncherAppWidgetInfo || info is WidgetStackInfo) {
+            val profile = currentDeviceProfile()
             popup.addAction(
                 R.string.widget_option_resize,
-                enabled = providerInfo != null && WidgetSizes.isResizable(providerInfo),
+                enabled = resizeLimits(info, profile, IntArray(2), IntArray(2)),
             ) { startWidgetResize(info) }
+        }
+
+        // The provider's own settings, for a widget that has any. A weather widget's city and a
+        // clock widget's timezone are set once, on the way in, and are otherwise unreachable
+        // afterwards - which is where "I cannot change what my widget shows" comes from.
+        val configurable = configurableWidget(info)
+        if (configurable != null) {
+            popup.addAction(R.string.widget_option_configure) { reconfigureWidget(configurable) }
+        }
+
+        // A stack is added to from the picker as well as by dropping one widget on another: the
+        // drag is the discoverable way in, and this is the one that works when the widget you want
+        // is not already on a page.
+        if (info is WidgetStackInfo) {
+            popup.addAction(
+                R.string.widget_option_add_to_stack,
+                enabled = info.contents.size < WidgetStackInfo.MAX_CONTENTS,
+            ) { openWidgetPicker(into = info) }
+            popup.addAction(R.string.widget_option_unstack) { unstackVisible(info) }
         }
 
         popup
@@ -1096,6 +1595,9 @@ class Launcher : Activity(), ItemPlacementHandler {
         // The widget flow owns its own state and has to see a cancel as clearly as a success:
         // every abandoned step leaves an allocated id behind if nobody releases it.
         when (requestCode) {
+            // Nothing to do: the provider updates its own widget, and the row did not change.
+            REQUEST_RECONFIGURE_WIDGET -> return
+
             REQUEST_PICK_WIDGET -> {
                 // The typed overload is API 33; this has to keep working on 29.
                 @Suppress("DEPRECATION")
@@ -1103,7 +1605,13 @@ class Launcher : Activity(), ItemPlacementHandler {
                     ?.getParcelableExtra<android.content.ComponentName>(
                         WidgetPickerActivity.EXTRA_PROVIDER,
                     )
-                if (resultCode == RESULT_OK && provider != null) bindWidget(provider)
+                if (resultCode == RESULT_OK && provider != null) {
+                    bindWidget(provider)
+                } else {
+                    // Backing out of the picker cancels whatever the pick was for, including a
+                    // stack that was waiting to be added to.
+                    abandonPendingWidget()
+                }
                 return
             }
 
@@ -1469,11 +1977,13 @@ class Launcher : Activity(), ItemPlacementHandler {
         scope.launch {
             findViewFor(info)?.let { removeViewFromParent(it) }
             if (info.id != app.auriel.edenlauncher.model.NO_ID) {
-                appState.repository.deleteItem(info)
+                // The rows are gone, so nothing will ever ask for their ids again. Left allocated,
+                // they are leaked for the life of the install and their providers keep being told
+                // widgets exist that nobody can see. A stack takes its whole pile with it.
+                for (id in appState.repository.deleteItem(info)) widgetHost.releaseWidgetId(id)
+            } else if (info is LauncherAppWidgetInfo) {
+                widgetHost.releaseWidgetId(info.appWidgetId)
             }
-            // The row is gone, so nothing will ever ask for this id again. Left allocated, it is
-            // leaked for the life of the install and its provider keeps being told it exists.
-            if (info is LauncherAppWidgetInfo) widgetHost.releaseWidgetId(info.appWidgetId)
             if (info is FolderInfo && openFolder?.folderInfo === info) closeFolder()
         }
     }
@@ -1538,6 +2048,104 @@ class Launcher : Activity(), ItemPlacementHandler {
                 appState.repository.updateItem(item)
             }
         }
+    }
+
+    /**
+     * Two widgets were dropped on each other: make a stack of them.
+     *
+     * The widget already on the page keeps its cells and its size, and the one dropped on it is
+     * resized to match - exactly what happens to the second icon when a folder is made. A widget
+     * whose provider cannot render the target's size is refused instead, because the alternative is
+     * a stack with a broken widget in it that the user has to take apart to fix.
+     */
+    override fun onWidgetStackRequested(
+        target: LauncherAppWidgetInfo,
+        dropped: LauncherAppWidgetInfo,
+        targetView: View?,
+        container: Long,
+        screenId: Long,
+        cellX: Int,
+        cellY: Int,
+    ) {
+        if (!fitsInStack(dropped, target.spanX, target.spanY)) {
+            // Nothing else to undo: the dragged view was only hidden, and the drag controller
+            // puts it back when the gesture ends.
+            Toast.makeText(this, R.string.widget_stack_too_small, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        scope.launch {
+            val stack = WidgetStackInfo().apply {
+                title = getString(R.string.widget_stack_name)
+                this.container = container
+                this.screenId = screenId
+                this.cellX = target.cellX
+                this.cellY = target.cellY
+                spanX = target.spanX
+                spanY = target.spanY
+            }
+            appState.repository.addItem(stack)
+
+            targetView?.let { removeViewFromParent(it) }
+            findViewFor(dropped)?.let { removeViewFromParent(it) }
+
+            for (widget in listOf(target, dropped)) {
+                stack.add(widget)
+                if (widget.id == app.auriel.edenlauncher.model.NO_ID) {
+                    appState.repository.addItem(widget)
+                } else {
+                    appState.repository.updateItem(widget)
+                }
+            }
+            // The pile opens on the widget that was just dropped: that is the one being looked at.
+            stack.visibleIndex = stack.contents.size - 1
+            appState.repository.updateItem(stack)
+
+            val view = createItemView(stack) ?: return@launch
+            if (!binding.workspace.addInScreen(view, stack)) rehomeItem(stack, view)
+            EdenLog.i(TAG, "stacked ${dropped.providerName} onto ${target.providerName}")
+        }
+    }
+
+    override fun onWidgetAddedToStack(stack: WidgetStackInfo, widget: LauncherAppWidgetInfo) {
+        if (stack.contents.size >= WidgetStackInfo.MAX_CONTENTS) {
+            Toast.makeText(this, R.string.widget_stack_full, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!fitsInStack(widget, stack.spanX, stack.spanY)) {
+            // Nothing else to undo: the dragged view was only hidden, and the drag controller
+            // puts it back when the gesture ends.
+            Toast.makeText(this, R.string.widget_stack_too_small, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        scope.launch {
+            findViewFor(widget)?.let { removeViewFromParent(it) }
+            stack.add(widget)
+            stack.visibleIndex = stack.contents.size - 1
+
+            if (widget.id == app.auriel.edenlauncher.model.NO_ID) {
+                appState.repository.addItem(widget)
+            } else {
+                appState.repository.updateItem(widget)
+            }
+            appState.repository.updateItem(stack)
+
+            val view = findViewFor(stack) as? WidgetStackView ?: return@launch
+            view.addWidgetView(createWidgetView(widget, inStack = true))
+        }
+    }
+
+    /**
+     * True when [widget] can be shown at the size a stack would give it.
+     *
+     * A widget whose provider is not installed passes: it is a placeholder either way, and the size
+     * it would need is unknowable until the app comes back.
+     */
+    private fun fitsInStack(widget: LauncherAppWidgetInfo, spanX: Int, spanY: Int): Boolean {
+        val providerInfo = WidgetBinding.providerFor(this, widget.appWidgetId) ?: return true
+        val min = WidgetSizes.minSpan(providerInfo, currentDeviceProfile())
+        return min[0] <= spanX && min[1] <= spanY
     }
 
     override fun onScreenOrderChanged(screenIds: List<Long>) {
@@ -1800,10 +2408,17 @@ class Launcher : Activity(), ItemPlacementHandler {
      */
     override fun onStart() {
         super.onStart()
+        isStarted = true
         widgetHost.startListeningSafely()
+        startWatchingTime()
+        // Whatever the clocks were showing, it was at least a minute ago.
+        refreshClocks()
     }
 
     override fun onStop() {
+        isStarted = false
+        stopWatchingTime()
+        clockTickJob?.cancel()
         widgetHost.stopListeningSafely()
         super.onStop()
     }
@@ -1816,6 +2431,19 @@ class Launcher : Activity(), ItemPlacementHandler {
         super.onResume()
 
         applyRotationSetting()
+
+        // A restore replaced the database and the settings while this activity was behind the
+        // settings screen. Nothing it is holding describes the launcher any more - not the grid,
+        // not the pages, not the icons - so it is rebuilt from scratch rather than patched. The
+        // signature checks below would catch some of this and miss the rest: a backup can restore
+        // an entirely different layout onto identical grid settings.
+        if (appState.consumeDataRestored()) {
+            gridSignature = null
+            iconSignature = null
+            appState.onConfigurationChanged()
+            recreate()
+            return
+        }
 
         val signature = appState.preferences.gridSignature
         if (gridSignature == null) {
@@ -1934,5 +2562,14 @@ class Launcher : Activity(), ItemPlacementHandler {
         const val REQUEST_PICK_WIDGET = 3
         const val REQUEST_BIND_WIDGET = 4
         const val REQUEST_CONFIGURE_WIDGET = 5
+
+        /**
+         * Reopening the settings of a widget that is already placed.
+         *
+         * A separate code from [REQUEST_CONFIGURE_WIDGET] because the two endings differ: that one
+         * places a widget when it returns, and this one has nothing to do - the provider has
+         * already pushed whatever the user changed.
+         */
+        const val REQUEST_RECONFIGURE_WIDGET = 6
     }
 }

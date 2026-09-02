@@ -3,7 +3,9 @@ package app.auriel.edenlauncher.dragndrop
 import android.view.View
 import app.auriel.edenlauncher.model.FolderInfo
 import app.auriel.edenlauncher.model.ItemInfo
+import app.auriel.edenlauncher.model.LauncherAppWidgetInfo
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.model.WidgetStackInfo
 
 /**
  * How a drop turns into a change the launcher persists.
@@ -40,6 +42,26 @@ interface ItemPlacementHandler {
 
     /** An icon was dropped onto an existing folder. */
     fun onItemAddedToFolder(folder: FolderInfo, item: ShortcutInfo)
+
+    /**
+     * Two widgets were stacked: replace [targetView] with a stack holding both.
+     *
+     * The widget-side twin of [onFolderCreationRequested]. [target] keeps its cells and its size,
+     * and [dropped] is resized to match - a stack is one block of the grid, and a child that kept
+     * its own span would either overflow it or leave a hole in it.
+     */
+    fun onWidgetStackRequested(
+        target: LauncherAppWidgetInfo,
+        dropped: LauncherAppWidgetInfo,
+        targetView: View?,
+        container: Long,
+        screenId: Long,
+        cellX: Int,
+        cellY: Int,
+    )
+
+    /** A widget was dropped onto an existing stack. */
+    fun onWidgetAddedToStack(stack: WidgetStackInfo, widget: LauncherAppWidgetInfo)
 
     /** Page order changed; persist the new ordering. */
     fun onScreenOrderChanged(screenIds: List<Long>)
