@@ -98,7 +98,7 @@ Every shot below is Eden 0.4.0 running on a Galaxy M31 (Android 16), captured of
 icons are themed by an icon pack the phone already had installed - nothing here is a mockup, and
 nothing was retouched.
 
-> **These screenshots are out of date.** They are from 0.4.0 and Eden is now on 0.6.1. Three
+> **These screenshots are out of date.** They are from 0.4.0 and Eden is now on 0.6.2. Three
 > releases of features are missing from them - widgets, widget stacks, simple mode, folders you can
 > take apps back out of, icon shapes, page reordering, backup and restore - and the launcher is a
 > good deal more stable than the one pictured.

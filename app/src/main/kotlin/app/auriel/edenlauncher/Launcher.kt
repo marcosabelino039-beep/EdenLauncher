@@ -111,6 +111,11 @@ class Launcher : Activity(), ItemPlacementHandler {
     /** The icon pack being applied over an already-bound home screen. See [applyIconTheme]. */
     private var iconThemeJob: Job? = null
 
+    /**
+     * The drop being written, if one still is. See [commitScreenChanges] for why anyone waits.
+     */
+    private var placementJob: Job? = null
+
     /** The bound items that draw a clock, once the scan has found them. Null until it has. */
     private var clockItems: LauncherModel.ClockItems? = null
 
@@ -494,6 +499,9 @@ class Launcher : Activity(), ItemPlacementHandler {
             .launchIn(scope)
         prefs.appDrawerOpacityFlow()
             .onEach { allApps.setBackgroundOpacity(it) }
+            .launchIn(scope)
+        prefs.drawerSearchAtBottomFlow()
+            .onEach { allApps.setSearchAtBottom(it) }
             .launchIn(scope)
     }
 
@@ -1906,7 +1914,7 @@ class Launcher : Activity(), ItemPlacementHandler {
         // the time a suspended body resumed, the folder it came out of would already be forgotten.
         detachFromDragSourceFolder(info)
 
-        scope.launch {
+        placementJob = scope.launch {
             var targetScreen = screenId
 
             // Dropping on the transient trailing page turns it into a real, persisted page.
@@ -1914,7 +1922,13 @@ class Launcher : Activity(), ItemPlacementHandler {
                 targetScreen == Workspace.EXTRA_EMPTY_SCREEN_ID
             ) {
                 targetScreen = appState.repository.addScreen()
-                binding.workspace.commitExtraEmptyScreen(targetScreen)
+                // The page is gone from the workspace if the drag ended while the row above was
+                // being written. The row exists either way, so the page is put back rather than
+                // the item being left naming a page nothing can show.
+                if (binding.workspace.commitExtraEmptyScreen(targetScreen) < 0) {
+                    binding.workspace.insertNewScreen(targetScreen)
+                    binding.workspace.bindOverviewCallbacks(appState.preferences.defaultScreenId)
+                }
             }
 
             val existingView = findViewFor(info)
@@ -2161,8 +2175,14 @@ class Launcher : Activity(), ItemPlacementHandler {
      * with you. Pages go away when the user removes them.
      */
     private fun commitScreenChanges() {
-        binding.workspace.removeExtraEmptyScreen()
-        scope.launch { appState.repository.reorderScreens(binding.workspace.screenIds) }
+        scope.launch {
+            // The drop that ended this drag may still be writing its page. Running first would
+            // take the transient page away from underneath it and then persist a page order taken
+            // before the new page existed - which is how an item ends up on a page that does not.
+            placementJob?.join()
+            binding.workspace.removeExtraEmptyScreen()
+            appState.repository.reorderScreens(binding.workspace.screenIds)
+        }
     }
 
     // ---- view lookup -----------------------------------------------------------------------------
@@ -2339,6 +2359,13 @@ class Launcher : Activity(), ItemPlacementHandler {
         if (allApps.isOpen) return
         closeFolder()
         exitOverview()
+
+        // Read here rather than watched: both are consulted at exactly this moment and nowhere
+        // else, and a preference read is a lookup in a map that is already in memory.
+        val prefs = appState.preferences
+        allApps.openKeyboardOnOpen = prefs.openKeyboardWithDrawer
+        allApps.rememberPosition = prefs.rememberDrawerPosition
+
         allApps.open()
         setHomeContentVisible(false)
         setWallpaperPaused(true)

@@ -79,6 +79,20 @@
         </intent>
 
         <!--
+            The system's own live wallpaper screens, which are the only way an ordinary app can
+            turn one on. Both are declared: the first goes straight to a confirmation for one
+            wallpaper, the second is the older list of everything installed, and which of them a
+            build ships varies. A device with neither cannot set a live wallpaper at all, and the
+            picker says so rather than failing a tile at a time.
+        -->
+        <intent>
+            <action android:name="android.service.wallpaper.CHANGE_LIVE_WALLPAPER" />
+        </intent>
+        <intent>
+            <action android:name="android.service.wallpaper.LIVE_WALLPAPER_CHOOSER" />
+        </intent>
+
+        <!--
             Widget providers, for the picker. A provider is an ordinary broadcast receiver with
             this action, and package visibility applies to it like anything else - without this a
             phone full of widgets can look as though it has none.

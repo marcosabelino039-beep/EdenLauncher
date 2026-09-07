@@ -62,6 +62,15 @@
     <string name="settings_drawer_mode_horizontal_summary">Swipe left and right between fixed grid pages</string>
     <string name="settings_drawer_opacity">Background opacity</string>
     <string name="settings_drawer_columns">Drawer columns</string>
+    <string name="settings_drawer_search_position">Search field</string>
+    <string name="settings_drawer_search_top">At the top</string>
+    <string name="settings_drawer_search_top_summary">Above the list, where the drawer starts</string>
+    <string name="settings_drawer_search_bottom">At the bottom</string>
+    <string name="settings_drawer_search_bottom_summary">Below the list, within reach of your thumb</string>
+    <string name="settings_drawer_keyboard">Open the keyboard with the drawer</string>
+    <string name="settings_drawer_keyboard_summary">Off, the drawer opens as a list of apps. On, it opens ready to be typed into.</string>
+    <string name="settings_drawer_remember_position">Reopen where you left off</string>
+    <string name="settings_drawer_remember_position_summary">Off, the drawer always opens at the start, so the same apps are always in the same place. On, it keeps your place. Searching always returns to the start.</string>
     <string name="settings_section_home">Home screen</string>
     <string name="settings_grid_columns">Grid columns</string>
     <string name="settings_grid_rows">Grid rows</string>
@@ -152,6 +161,9 @@
     <string name="wallpaper_applied">Wallpaper set</string>
     <string name="wallpaper_failed">Could not set that wallpaper</string>
     <string name="wallpaper_preview_note">Previews are still frames. Nothing starts running until you set it.</string>
+    <string name="wallpaper_live_unsupported_note">This phone has no screen for turning on live wallpapers, so these cannot be set here. Pictures still work.</string>
+    <string name="wallpaper_live_unsupported_title">Live wallpapers are not available</string>
+    <string name="wallpaper_live_unsupported_message">Turning on a live wallpaper needs a confirmation screen that belongs to the system, and this phone does not have one. Android reserves the direct way of doing it for system apps, so no launcher can work around this.\n\nA picture can still be set from here, and Eden will crop and position it for you.</string>
 
     <string name="wallpaper_pick_video">Choose a video</string>
     <string name="wallpaper_video_current">Your video</string>

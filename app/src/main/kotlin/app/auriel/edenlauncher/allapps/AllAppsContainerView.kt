@@ -53,6 +53,20 @@ class AllAppsContainerView @JvmOverloads constructor(
     private var allApps: List<AppInfo> = emptyList()
     private var query: String = ""
 
+    /** The search field is below the list rather than above it. See [setSearchAtBottom]. */
+    private var searchAtBottom = false
+
+    /**
+     * Opening the drawer raises the keyboard and puts the cursor in the search field.
+     *
+     * Read from settings on every open rather than watched, because it is only ever consulted at
+     * that moment and a preference read is a map lookup.
+     */
+    var openKeyboardOnOpen: Boolean = false
+
+    /** The drawer reopens where it was left instead of at the top. */
+    var rememberPosition: Boolean = false
+
     var onAppClick: ((AppInfo) -> Unit)? = null
     var onAppLongClick: ((AppInfo, View) -> Unit)? = null
 
@@ -163,6 +177,29 @@ class AllAppsContainerView @JvmOverloads constructor(
     }
 
     /**
+     * Puts the search field below the list, or back above it.
+     *
+     * The children are reordered rather than relaid out from scratch: the field, the list and the
+     * page dots are the same three views either way, and detaching the list would throw away its
+     * scroll position and every view it has recycled.
+     *
+     * The page dots stay next to the list in both arrangements. They belong to the list - they say
+     * where in it you are - and a row of dots stranded below the search field would read as
+     * decoration on the field instead.
+     */
+    fun setSearchAtBottom(bottom: Boolean) {
+        if (bottom == searchAtBottom && indexOfChild(searchField) >= 0) return
+        searchAtBottom = bottom
+
+        removeView(searchField)
+        addView(
+            searchField,
+            if (bottom) childCount else 0,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+        )
+    }
+
+    /**
      * Sets background opacity, 0 (wallpaper fully visible through the drawer) to 100 (opaque).
      */
     fun setBackgroundOpacity(percent: Int) {
@@ -171,7 +208,9 @@ class AllAppsContainerView @JvmOverloads constructor(
 
     fun setApps(apps: List<AppInfo>) {
         allApps = apps
-        applyFilter()
+        // A different list of apps: whatever position was remembered was measured against the old
+        // one, and an install or an uninstall has moved everything after it.
+        applyFilter(resetPosition = true)
     }
 
     /**
@@ -192,19 +231,23 @@ class AllAppsContainerView @JvmOverloads constructor(
      * renaming an app quietly makes it unfindable under the name it actually has, which is a trap
      * that only springs months later.
      */
-    private fun applyFilter() {
+    private fun applyFilter(resetPosition: Boolean = true) {
         val view = drawerView ?: return
         if (query.isBlank()) {
             view.submitApps(allApps)
-            return
+        } else {
+            val needle = query.trim()
+            view.submitApps(
+                allApps.filter { app ->
+                    app.title?.contains(needle, ignoreCase = true) == true ||
+                        app.originalTitle?.contains(needle, ignoreCase = true) == true
+                },
+            )
         }
-        val needle = query.trim()
-        view.submitApps(
-            allApps.filter { app ->
-                app.title?.contains(needle, ignoreCase = true) == true ||
-                    app.originalTitle?.contains(needle, ignoreCase = true) == true
-            },
-        )
+        // The list on screen is not the list any remembered position was measured against, so a
+        // filter always starts at the top. Only an open with nothing typed can pick up where it
+        // left off.
+        if (resetPosition) view.resetScroll()
     }
 
     // ---- pull to close ---------------------------------------------------------------------------
@@ -316,7 +359,24 @@ class AllAppsContainerView @JvmOverloads constructor(
         alpha = 0f
         translationY = height * OPEN_TRANSLATION_RATIO
         animate().alpha(1f).translationY(0f).setDuration(OPEN_DURATION_MS).start()
-        drawerView?.resetScroll()
+        if (!rememberPosition) drawerView?.resetScroll()
+        if (openKeyboardOnOpen) showKeyboard()
+    }
+
+    /**
+     * Raises the keyboard on the search field, once the drawer is actually on screen.
+     *
+     * Posted rather than called straight away: the panel is animating in from GONE, and asking for
+     * the keyboard on a view the window does not consider visible yet is a request the input
+     * method manager quietly drops.
+     */
+    private fun showKeyboard() {
+        searchField.requestFocus()
+        searchField.post {
+            if (!isOpen) return@post
+            context.getSystemService(InputMethodManager::class.java)
+                ?.showSoftInput(searchField, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     fun close() {
@@ -325,7 +385,10 @@ class AllAppsContainerView @JvmOverloads constructor(
         pulling = false
         releaseTracker()
         hideKeyboard()
-        searchField.setText("")
+        // Only when there is something to clear. Setting the text notifies the watcher either way,
+        // and the filter it re-runs would send the list back to the top - which is the position
+        // [rememberPosition] exists to keep.
+        if (searchField.text.isNotEmpty()) searchField.setText("")
         // Never less than where the drawer already is: closing after a pull that went further than
         // the closing offset would otherwise animate the panel back up before it disappeared.
         val target = maxOf(translationY, height * OPEN_TRANSLATION_RATIO)

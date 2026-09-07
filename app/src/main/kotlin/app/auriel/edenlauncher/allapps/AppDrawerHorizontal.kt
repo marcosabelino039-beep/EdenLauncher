@@ -42,6 +42,10 @@ class AppDrawerHorizontal(context: Context) : PagedView(context), AppDrawerView 
     override var onAppLongClick: ((AppInfo, View) -> Unit)? = null
 
     override fun submitApps(apps: List<AppInfo>) {
+        // Which page was showing, so a rebuild that changes nothing the user can see does not
+        // also move them. The container asks for the start explicitly, through resetScroll, on
+        // every path where the start is the right answer.
+        val wasOn = currentPageIndex
         removeAllViews()
         if (apps.isEmpty()) return
 
@@ -72,7 +76,7 @@ class AppDrawerHorizontal(context: Context) : PagedView(context), AppDrawerView 
                 index++
             }
         }
-        setCurrentPage(0)
+        setCurrentPage(wasOn.coerceIn(0, childCount - 1))
     }
 
     override fun resetScroll() = setCurrentPage(0)

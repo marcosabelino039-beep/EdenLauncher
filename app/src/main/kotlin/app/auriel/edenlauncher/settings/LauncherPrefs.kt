@@ -40,6 +40,45 @@ class LauncherPrefs(context: Context) {
         set(value) = prefs.edit().putString(KEY_DRAWER_MODE, value.name).apply()
 
     /**
+     * Where the drawer's search field sits: the top of the panel, or the bottom.
+     *
+     * Top is the default because that is where the drawer was built to put it and where a list
+     * reads from. Bottom exists because a phone is held at the bottom: on a tall screen the search
+     * field is the one control in the drawer that is reached by the thumb rather than looked at,
+     * and a field the thumb cannot reach is a field that gets used by scrolling instead.
+     */
+    var drawerSearchAtBottom: Boolean
+        get() = prefs.getBoolean(KEY_DRAWER_SEARCH_BOTTOM, false)
+        set(value) = prefs.edit().putBoolean(KEY_DRAWER_SEARCH_BOTTOM, value).apply()
+
+    /**
+     * Whether opening the drawer opens the keyboard with it.
+     *
+     * Off by default, and it has to be: the drawer is opened to *look* at apps at least as often
+     * as to search for one, and a keyboard that appears unasked covers half of what was opened.
+     * On, it turns the drawer into a search box that happens to list everything, which is how a
+     * lot of people use it and how nobody else does.
+     */
+    var openKeyboardWithDrawer: Boolean
+        get() = prefs.getBoolean(KEY_DRAWER_KEYBOARD, false)
+        set(value) = prefs.edit().putBoolean(KEY_DRAWER_KEYBOARD, value).apply()
+
+    /**
+     * Whether the drawer reopens where it was left rather than at the start.
+     *
+     * Off by default. The drawer opening at the top is what makes its contents predictable - the
+     * same apps are under the same part of the screen every time - and that is worth more than
+     * saving a fling to most people. It is worth less than a fling to anyone whose apps are at the
+     * bottom of a long alphabet, which is why this is a setting and not a decision.
+     *
+     * A search always resets the position: the list on screen is no longer the list the remembered
+     * position was measured against.
+     */
+    var rememberDrawerPosition: Boolean
+        get() = prefs.getBoolean(KEY_DRAWER_REMEMBER_POSITION, false)
+        set(value) = prefs.edit().putBoolean(KEY_DRAWER_REMEMBER_POSITION, value).apply()
+
+    /**
      * Drawer background opacity, 0 (fully transparent, wallpaper shows through) to 100 (opaque).
      */
     var appDrawerOpacity: Int
@@ -318,6 +357,10 @@ class LauncherPrefs(context: Context) {
 
     fun appDrawerOpacityFlow(): Flow<Int> = keyFlow(KEY_DRAWER_OPACITY) { appDrawerOpacity }
 
+    /** The search field's side of the drawer, watched because moving it is a layout change. */
+    fun drawerSearchAtBottomFlow(): Flow<Boolean> =
+        keyFlow(KEY_DRAWER_SEARCH_BOTTOM) { drawerSearchAtBottom }
+
     private fun <T> keyFlow(key: String, read: () -> T): Flow<T> = callbackFlow {
         trySend(read())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changed ->
@@ -360,6 +403,9 @@ class LauncherPrefs(context: Context) {
         private const val FILE_NAME = "eden_prefs"
         private const val KEY_DRAWER_MODE = "app_drawer_mode"
         private const val KEY_DRAWER_OPACITY = "app_drawer_opacity"
+        private const val KEY_DRAWER_SEARCH_BOTTOM = "app_drawer_search_bottom"
+        private const val KEY_DRAWER_KEYBOARD = "app_drawer_open_keyboard"
+        private const val KEY_DRAWER_REMEMBER_POSITION = "app_drawer_remember_position"
         private const val KEY_GRID_COLUMNS = "workspace_columns"
         private const val KEY_GRID_ROWS = "workspace_rows"
         private const val KEY_DRAWER_COLUMNS = "drawer_columns"

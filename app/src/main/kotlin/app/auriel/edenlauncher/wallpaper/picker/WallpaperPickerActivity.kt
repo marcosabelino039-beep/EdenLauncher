@@ -51,6 +51,12 @@ import kotlinx.coroutines.withContext
  * API for setting one directly is reserved for the system. That is the right place for it anyway.
  * Browsing is exploratory and should be free; setting is a decision and gets one deliberate
  * confirmation, for the one wallpaper you chose.
+ *
+ * Not every phone has that screen. Some builds - Motorola's Android 16 among them - ship a
+ * wallpaper app that handles pictures and nothing else, and the intent every launcher has used
+ * since Android 4.1 resolves to nothing at all. There is no way around it and no second API to
+ * try, so the picker says so plainly, up front and once, and points at the part of itself that
+ * does work rather than letting every live tile fail one at a time. See [liveWallpapersSupported].
  */
 class WallpaperPickerActivity : Activity() {
 
@@ -72,6 +78,23 @@ class WallpaperPickerActivity : Activity() {
 
     /** The visualiser waiting on a permission answer before it is set. */
     private var pendingVisualizerComponent: android.content.ComponentName? = null
+
+    /**
+     * Whether this device has any screen that can turn a live wallpaper on.
+     *
+     * Resolved once, at build time, because the answer decides how the whole screen reads: with no
+     * such screen the live and video sections are a list of things that cannot be chosen, and
+     * saying that at the top is worth more than a failure message per tap.
+     *
+     * Both actions are tried. `CHANGE_LIVE_WALLPAPER` is the one that takes a component and goes
+     * straight to a confirmation for it; `LIVE_WALLPAPER_CHOOSER` is the older list of everything
+     * installed, which lands the user one tap away from the same result. Either will do.
+     */
+    private val liveWallpapersSupported: Boolean by lazy {
+        LIVE_WALLPAPER_ACTIONS.any { action ->
+            packageManager.resolveActivity(Intent(action), 0) != null
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -105,7 +128,13 @@ class WallpaperPickerActivity : Activity() {
         }
 
         content.addView(header(getString(R.string.wallpaper_section_live)))
-        content.addView(note(getString(R.string.wallpaper_preview_note)))
+        content.addView(
+            if (liveWallpapersSupported) {
+                note(getString(R.string.wallpaper_preview_note))
+            } else {
+                note(getString(R.string.wallpaper_live_unsupported_note))
+            },
+        )
         content.addView(bundledGrid())
 
         content.addView(header(getString(R.string.wallpaper_section_video)))
@@ -166,10 +195,12 @@ class WallpaperPickerActivity : Activity() {
         column.addView(grid)
 
         val status = note(
-            if (currentVideoFile()?.exists() == true) {
-                getString(R.string.wallpaper_video_ready)
-            } else {
-                getString(R.string.wallpaper_video_none)
+            when {
+                // A video wallpaper is a live wallpaper, so it needs the same screen. Importing one
+                // still works and is still kept; it just cannot be turned on here.
+                !liveWallpapersSupported -> getString(R.string.wallpaper_live_unsupported_note)
+                currentVideoFile()?.exists() == true -> getString(R.string.wallpaper_video_ready)
+                else -> getString(R.string.wallpaper_video_none)
             },
         )
         videoStatus = status
@@ -312,6 +343,12 @@ class WallpaperPickerActivity : Activity() {
     // ---- setting -----------------------------------------------------------------------------
 
     private fun setLiveWallpaper(wallpaper: BundledWallpaper) {
+        // Asked before the visualiser's own question: choosing how a wallpaper should listen is a
+        // question worth answering only if it can be set at all.
+        if (!liveWallpapersSupported) {
+            explainNoLiveWallpapers()
+            return
+        }
         if (wallpaper.needsPermissionNote) {
             askAudioSourceThenSet(wallpaper)
             return
@@ -390,14 +427,44 @@ class WallpaperPickerActivity : Activity() {
      * a wallpaper starts running, and only because you asked for that one.
      */
     private fun setLiveWallpaperComponent(component: android.content.ComponentName) {
-        val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
+        val direct = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
             .putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component)
-        try {
-            startActivityForResult(intent, REQUEST_SET_LIVE)
-        } catch (e: ActivityNotFoundException) {
-            EdenLog.w(TAG, "No live wallpaper chooser on this device", e)
-            Toast.makeText(this, R.string.wallpaper_failed, Toast.LENGTH_SHORT).show()
-        }
+        if (startForResultOrNull(direct)) return
+
+        // The older, component-less list. A worse experience - the user has to find the wallpaper
+        // again in someone else's list - but it is a working way in, and a phone that has one of
+        // these two screens and not the other is not a phone anybody should have to think about.
+        if (startForResultOrNull(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER))) return
+
+        EdenLog.w(TAG, "No live wallpaper screen on this device; nothing can set " + component)
+        explainNoLiveWallpapers()
+    }
+
+    /** Starts [intent] for a result, returning false when nothing on the device handles it. */
+    private fun startForResultOrNull(intent: Intent): Boolean = try {
+        startActivityForResult(intent, REQUEST_SET_LIVE)
+        true
+    } catch (e: ActivityNotFoundException) {
+        EdenLog.w(TAG, "No activity for ${intent.action}", e)
+        false
+    }
+
+    /**
+     * Says why a live wallpaper cannot be set here, and offers the thing that can.
+     *
+     * Setting a live wallpaper needs a system screen this device does not have, and no permission,
+     * API level or workaround changes that - `setWallpaperComponent` is guarded by a signature
+     * permission no ordinary app can hold. So the dialog does not apologise and promise to try
+     * again; it says what is true, and opens the picture picker, which is the only thing left that
+     * does what the user came here to do.
+     */
+    private fun explainNoLiveWallpapers() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle(R.string.wallpaper_live_unsupported_title)
+            .setMessage(R.string.wallpaper_live_unsupported_message)
+            .setPositiveButton(R.string.wallpaper_pick_image) { _, _ -> pickImage() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     /**
@@ -599,6 +666,13 @@ class WallpaperPickerActivity : Activity() {
 
     private companion object {
         const val TAG = "WallpaperPicker"
+
+        /** Every action that can lead to a live wallpaper being turned on, best first. */
+        val LIVE_WALLPAPER_ACTIONS = listOf(
+            WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER,
+            WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER,
+        )
+
         const val COLUMNS = 2
         const val TILE_ASPECT = 1.5f
         const val REQUEST_VIDEO = 1
