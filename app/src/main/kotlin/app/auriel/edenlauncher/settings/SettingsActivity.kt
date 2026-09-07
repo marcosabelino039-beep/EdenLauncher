@@ -101,6 +101,15 @@ class SettingsActivity : Activity() {
         column.addView(opacitySlider())
 
         column.addView(
+            label(getString(R.string.settings_drawer_search_position)),
+            spacedParams(spacing),
+        )
+        column.addView(searchPositionChooser())
+
+        column.addView(drawerKeyboardToggle(), spacedParams(spacing))
+        column.addView(drawerRememberPositionToggle(), spacedParams(spacing))
+
+        column.addView(
             label(getString(R.string.settings_drawer_columns)),
             spacedParams(spacing),
         )
@@ -299,6 +308,70 @@ class SettingsActivity : Activity() {
                 if (checkedId == ID_HORIZONTAL) AppDrawerMode.HORIZONTAL else AppDrawerMode.VERTICAL
         }
         return group
+    }
+
+    /**
+     * Which end of the drawer the search field sits at.
+     *
+     * A pair of radios rather than a checkbox called something like "search at the bottom": the
+     * two positions are alternatives, not a feature and its absence, and a checkbox would make the
+     * default sound like the thing being switched off.
+     */
+    private fun searchPositionChooser(): View {
+        val group = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+
+        group.addView(
+            radio(
+                getString(R.string.settings_drawer_search_top),
+                getString(R.string.settings_drawer_search_top_summary),
+                id = ID_SEARCH_TOP,
+            ),
+        )
+        group.addView(
+            radio(
+                getString(R.string.settings_drawer_search_bottom),
+                getString(R.string.settings_drawer_search_bottom_summary),
+                id = ID_SEARCH_BOTTOM,
+            ),
+        )
+
+        group.check(if (prefs.drawerSearchAtBottom) ID_SEARCH_BOTTOM else ID_SEARCH_TOP)
+        group.setOnCheckedChangeListener { _, checkedId ->
+            prefs.drawerSearchAtBottom = checkedId == ID_SEARCH_BOTTOM
+        }
+        return group
+    }
+
+    /** Whether the keyboard comes up with the drawer. See [LauncherPrefs.openKeyboardWithDrawer]. */
+    private fun drawerKeyboardToggle(): View {
+        val toggle = android.widget.CheckBox(this).apply {
+            text = getString(R.string.settings_drawer_keyboard)
+            setTextColor(getColor(R.color.settings_text))
+            textSize = 16f
+            isChecked = prefs.openKeyboardWithDrawer
+            setOnCheckedChangeListener { _, checked -> prefs.openKeyboardWithDrawer = checked }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(toggle)
+            addView(summary(getString(R.string.settings_drawer_keyboard_summary)))
+        }
+    }
+
+    /** Whether the drawer reopens where it was left. See [LauncherPrefs.rememberDrawerPosition]. */
+    private fun drawerRememberPositionToggle(): View {
+        val toggle = android.widget.CheckBox(this).apply {
+            text = getString(R.string.settings_drawer_remember_position)
+            setTextColor(getColor(R.color.settings_text))
+            textSize = 16f
+            isChecked = prefs.rememberDrawerPosition
+            setOnCheckedChangeListener { _, checked -> prefs.rememberDrawerPosition = checked }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(toggle)
+            addView(summary(getString(R.string.settings_drawer_remember_position_summary)))
+        }
     }
 
     private fun opacitySlider(): View {
@@ -1009,6 +1082,8 @@ class SettingsActivity : Activity() {
 
         const val ID_VERTICAL = 1
         const val ID_HORIZONTAL = 2
+        const val ID_SEARCH_TOP = 3
+        const val ID_SEARCH_BOTTOM = 4
         const val REQUEST_RECORD_AUDIO = 10
         const val REQUEST_EXPORT_BACKUP = 11
         const val REQUEST_IMPORT_BACKUP = 12

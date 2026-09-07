@@ -51,6 +51,21 @@ still reads, and so the eventual backup agent has nothing to translate.
 No destructive-migration fallback. Losing someone's home screen to a schema change is not an
 acceptable failure mode.
 
+A page and the items on it are two tables, and nothing in SQLite ties them together. `loadWorkspace`
+reconciles them on every load: an item naming a page with no row of its own gets that page back,
+appended at the end, rather than being re-homed onto another one and losing the arrangement it was
+part of. `LauncherDao.replaceScreens` will not delete a page that still holds items either -
+reordering is not how a page is deleted, so a page missing from the order is a caller working from a
+stale picture of the workspace, not an instruction.
+
+Both exist because of one race, fixed in v0.6.2. Dropping an icon on the trailing "new page" wrote
+the page and its item from a coroutine while the end of the same drag rewrote the page list from the
+workspace synchronously, and whichever finished second decided whether the item still had a page to
+sit on. When the drag won, the row was written to a page that had just been deleted: invisible on
+every screen, impossible to reach, and `E/Workspace: addInScreen: no page with id N` on every load
+afterwards. `Launcher.commitScreenChanges` now waits for the drop it belongs to, and the two
+reconciliations above heal the databases that already went through it.
+
 Deep shortcuts reuse the `intent` column: the package and shortcut id ride inside a stored intent,
 so pinned shortcuts needed no schema change.
 
@@ -294,6 +309,33 @@ given a typed field, so it carries its `ItemInfo` as a tag - which is what AOSP 
 workspace child. Without it `findViewFor` cannot locate a widget, and resize, remove and move all
 silently do nothing.
 
+## The app drawer
+
+`AllAppsContainerView` owns the search field, the filter and the background; the list is whichever
+`AppDrawerView` the current mode selects. Three things about it are the user's choice rather than
+the launcher's, and all three are settings because each of them is genuinely worse for somebody.
+
+**Which end the search field is at.** Moving it reorders the three children rather than rebuilding
+the panel: detaching the list would throw away its scroll position and every view it has recycled.
+The page dots stay next to the list in both arrangements - they say where in the list you are, and
+a row of dots stranded below the search field reads as decoration on the field. The keyboard is
+handled by the activity's `adjustPan`, which is what pans a focused field at the bottom of a window
+clear of the IME.
+
+**Whether the keyboard opens with the drawer.** Off by default: the drawer is opened to look at
+apps at least as often as to search, and an unasked keyboard covers half of what was just opened.
+The request is posted rather than made immediately, because a view that is still animating in from
+`GONE` is one the input method manager will quietly refuse.
+
+**Whether it reopens where it was left.** Off by default, because a drawer that always opens at the
+top is a drawer where the same apps are always under the same part of the screen. On, `open()`
+skips `resetScroll`. Two paths conspire against this and both are handled: `close()` only clears the
+search field when something was actually typed - setting the text notifies the watcher either way,
+and the filter it re-runs would send the list back to the top - and `AppDrawerHorizontal.submitApps`
+now restores the page it was on instead of always page 0, leaving the start to `resetScroll` for
+the callers that actually want it. Any filter change still resets: the list on screen is not the
+list the remembered position was measured against.
+
 ## Simple mode
 
 One switch in settings turns Eden back into what it was at v0.2.0. The scope was taken from the
@@ -382,7 +424,7 @@ Three treatments, picked by looking at what arrived:
 
 | Artwork | Treatment | Why |
 |---------|-----------|-----|
-| An adaptive icon | Its two layers are drawn straight into the outline | Adaptive icons exist to be masked to an arbitrary shape. This is the only case where the result is exactly what the icon's author intended. |
+| An adaptive icon | Its two layers are drawn flat, then measured and treated as one of the two rows below | Adaptive icons exist to be masked to an arbitrary shape, so the layers are drawn with the platform's own mask never running. What cannot be assumed is that they fill the box - see below. |
 | Anything that fills its box - a pack's icon, a composition, most legacy icons | Scaled to cover, then clipped | Whatever falls outside is lost. That is the honest cost of asking for a circle when the author drew a square. |
 | A glyph floating on transparency | A plate in the shape, tinted from the artwork's own dominant hue, with the glyph set into it | Clipping a small mark in the middle of an empty square to a circle produces the mark and no visible shape at all. |
 
@@ -395,6 +437,20 @@ Two details that are not obvious and are load-bearing:
 - **Masked with `DST_IN`, not `clipPath`.** A clip path on a software canvas has no antialiasing,
   and a circle with a staircase for an edge is worse than no shape. The output bitmap is its own
   layer, so no `saveLayer` is needed.
+- **An adaptive icon is measured, not trusted.** A legal adaptive icon has a background that reaches
+  every edge, and until v0.6.2 `shapeAdaptive` masked the layers on that assumption. Several OEM
+  builds - Motorola's Android 16 among them - hand a launcher an icon that has already been masked
+  to the device's own shape and then wrapped back into an adaptive one: transparent background, and
+  a foreground holding a circle that stops well inside the safe zone. Every outline here
+  circumscribes that circle, so the mask removed nothing and changing the shape did nothing at all
+  on those phones. The layers are now rendered flat and handed to the same analysis as any other
+  artwork, which plates them when they do not fill their box.
+- **A shape change explains itself in the log.** `IconShaper.describeNextIcons`, called from
+  `IconCache.refreshIconSources`, logs what the shaper was actually handed for the first three
+  icons of the next pass: the drawable class, whether it is adaptive, its two layers, and the
+  content bounds that decided the treatment. Bounded, because the alternative is a line per app per
+  rebind and the log is 48 hours long. An icon that comes out looking like the one before it leaves
+  no other trace.
 
 Shapes ride the second pass (below) rather than the load, so a cold start costs nothing for them
 and they arrive in waves like a pack does. `hasThemedSource` is what gates that, and it now counts
@@ -500,6 +556,25 @@ honest preview rather than the same scene at a quarter scale.
 Nothing draws while hidden. The launcher additionally sends `COMMAND_PAUSE` through
 `WallpaperManager.sendWallpaperCommand` when an opaque app drawer covers the wallpaper, because the
 system still considers it visible there.
+
+### Devices with no live wallpaper screen
+
+Setting a live wallpaper is not something an app does. `WallpaperManager.setWallpaperComponent` is
+guarded by a signature permission, so the only route is to ask the system to show its own
+confirmation - `ACTION_CHANGE_LIVE_WALLPAPER` for one named wallpaper, or the older
+`ACTION_LIVE_WALLPAPER_CHOOSER` for a list of all of them. Both are declared in `<queries>`, because
+package visibility applies to resolving them like anything else.
+
+Some builds ship neither. Motorola's Android 16 has a wallpaper app that handles pictures and
+nothing else, and the intent every launcher has used since Android 4.1 resolves to nothing: an
+`ActivityNotFoundException` per tap, which the picker used to answer with "could not set that
+wallpaper" - a message that reads like a bug in Eden and invites a second attempt.
+
+`WallpaperPickerActivity.liveWallpapersSupported` resolves both actions once, when the screen is
+built, and the answer changes what the screen says rather than what one tap does: the live and video
+sections carry a line explaining that this phone cannot turn them on, and a tap gets a dialog that
+says the same thing and opens the picture picker, which is the one thing here that still works.
+There is no fallback to write and none to look for.
 
 ## Static wallpapers
 

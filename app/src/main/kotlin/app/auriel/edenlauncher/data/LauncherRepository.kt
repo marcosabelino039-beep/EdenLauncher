@@ -96,7 +96,43 @@ class LauncherRepository(
         }
 
         hotseat.sortBy { it.rank }
-        WorkspaceData(screens, workspace, hotseat)
+        WorkspaceData(reconcileScreens(screens, workspace), workspace, hotseat)
+    }
+
+    /**
+     * Gives back any page an item still names but that has no row of its own.
+     *
+     * A row pointing at a page that does not exist is invisible: the bind has nowhere to put it,
+     * and the launcher's only recourse is to move it somewhere else, which loses the arrangement it
+     * was part of. Recreating the page instead puts everything on it back exactly where it was, and
+     * costs an empty page in the one case where the item was the last trace of a page that really
+     * was deleted.
+     *
+     * Databases in the wild already contain these - see `LauncherDao.replaceScreens` for how they
+     * got there - so this heals rather than merely preventing. Negative ids are left alone: the
+     * only one that can appear is the transient trailing page, which is not a page anybody asked
+     * for and must not become one.
+     */
+    private suspend fun reconcileScreens(
+        screens: List<Long>,
+        workspaceItems: List<ItemInfo>,
+    ): List<Long> {
+        val known = screens.toHashSet()
+        val missing = workspaceItems
+            .map { it.screenId }
+            .filter { it > 0 && it !in known }
+            .distinct()
+            .sorted()
+        if (missing.isEmpty()) return screens
+
+        val stamp = now()
+        dao.insertScreens(
+            missing.mapIndexed { index, id ->
+                WorkspaceScreenEntity(id = id, screenRank = screens.size + index, modified = stamp)
+            },
+        )
+        EdenLog.i(TAG, "restored page(s) $missing that items still referred to")
+        return screens + missing
     }
 
     /** Inserts [item], assigning its database id in place. */
@@ -169,14 +205,24 @@ class LauncherRepository(
         widgetIds
     }
 
-    /** Persists a new page order; [screenIds] is the full list, left to right. */
+    /**
+     * Persists a new page order; [screenIds] is the full list, left to right.
+     *
+     * A page the caller does not know about but that still holds items is kept and appended, not
+     * deleted. See `LauncherDao.replaceScreens`.
+     */
     suspend fun reorderScreens(screenIds: List<Long>) = withContext(io) {
         val stamp = now()
-        dao.replaceScreens(
+        val rescued = dao.replaceScreens(
             screenIds.mapIndexed { rank, id ->
                 WorkspaceScreenEntity(id = id, screenRank = rank, modified = stamp)
             },
+            Containers.DESKTOP,
+            stamp,
         )
+        if (rescued.isNotEmpty()) {
+            EdenLog.w(TAG, "page order omitted $rescued, which still hold items; kept them")
+        }
     }
 
     /**

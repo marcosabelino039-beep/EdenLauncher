@@ -123,6 +123,9 @@ class IconCache(private val context: Context, private val iconSizePx: Int) {
         if (shape != iconShape) {
             iconShape = shape
             themedCache.evictAll()
+            // The next few icons say in the log what the shaper was actually handed. A shape that
+            // comes out looking like the last one is otherwise undiagnosable from the device.
+            IconShaper.describeNextIcons()
             EdenLog.i(TAG, "icon shape is now $shape")
         }
     }

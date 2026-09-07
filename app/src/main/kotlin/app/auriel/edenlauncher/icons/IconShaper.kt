@@ -14,6 +14,7 @@ import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.LayerDrawable
+import app.auriel.edenlauncher.util.EdenLog
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -56,9 +57,21 @@ object IconShaper {
     fun shape(drawable: Drawable, shape: IconShape, size: Int): Bitmap {
         if (size <= 0) return rasterise(drawable, max(size, 1))
         if (!shape.isOverride) return rasterise(drawable, size)
+        described = drawable
         if (drawable is AdaptiveIconDrawable) return shapeAdaptive(drawable, shape, size)
         return shape(rasterise(drawable, size), shape, size)
     }
+
+    /**
+     * The drawable the shaping in flight came from, for the log line only.
+     *
+     * A field rather than an argument threaded through four functions: the bitmap entry point is
+     * public and is called with no drawable at all in the clock and pack paths, and widening every
+     * signature to carry something only the diagnostic reads would be paying for it everywhere.
+     * Written and read on the icon pass, which is one job at a time.
+     */
+    @Volatile
+    private var described: Drawable? = null
 
     /**
      * Cuts an already-rendered icon to [shape], returning a new bitmap of [size] square.
@@ -73,6 +86,10 @@ object IconShaper {
         shape.outline(size.toFloat(), outline)
 
         val analysis = analyse(source)
+        described?.let {
+            described = null
+            describe(it, analysis, shape, size)
+        }
         return if (analysis.fillsItsBox) {
             clipToOutline(source, analysis.content, outline, size)
         } else {
@@ -83,24 +100,74 @@ object IconShaper {
     // ---- the three treatments --------------------------------------------------------------------
 
     /**
-     * Draws an adaptive icon's layers into the shape.
+     * Draws an adaptive icon's layers, then treats the result like any other artwork.
      *
      * An adaptive icon is 108 units square of which the middle 72 are guaranteed visible, so the
      * layers are drawn 1.5 times the size of the output and centred - which is exactly what
      * [AdaptiveIconDrawable] does to its children when its own bounds are set, so the arithmetic
-     * is left to it rather than repeated here.
+     * is left to it rather than repeated here. Drawing the layers directly is the point: the
+     * platform's own mask never runs, so the shape is cut from the artwork rather than recovered
+     * from a picture the device has already rounded off.
+     *
+     * What it must *not* do is assume the layers fill the box. They are supposed to - a background
+     * that does not reach the edges is not a legal adaptive icon - but several OEM builds hand a
+     * launcher an icon that is already masked to the device's own shape and then wrapped back up as
+     * an adaptive one: a transparent background, and a foreground holding a circle that stops well
+     * inside the safe zone. Every outline in [IconShape] circumscribes that circle, so masking it
+     * removes nothing at all, and changing the shape appeared to do nothing on those phones -
+     * Motorola's Android 16 among them.
+     *
+     * So the layers are rendered flat and handed to the bitmap path, which measures what it was
+     * actually given: artwork that fills its box is clipped to the shape as before, and artwork
+     * that floats in the middle of one gets the shape drawn *behind* it. Either way the shape the
+     * user chose is the shape they get.
      */
     private fun shapeAdaptive(drawable: AdaptiveIconDrawable, shape: IconShape, size: Int): Bitmap {
-        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
+        val layers = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(layers)
 
         // Setting the parent's bounds is what lays the two layers out over the full 108 units.
         drawable.setBounds(0, 0, size, size)
         drawable.background?.draw(canvas)
         drawable.foreground?.draw(canvas)
 
-        maskInPlace(canvas, shape, size)
-        return output
+        val shaped = shape(layers, shape, size)
+        if (shaped !== layers) layers.recycle()
+        return shaped
+    }
+
+    // ---- diagnostics -----------------------------------------------------------------------------
+
+    /**
+     * How many icons are still to be described in the log after a shape change.
+     *
+     * A shape that comes out looking like the one before it is not something the user can debug and
+     * not something a stack trace records, so the shaper says what it was handed - for the first
+     * few icons of a pass and then never again. Bounded because the alternative is a line per app
+     * per rebind, and the log is 48 hours long.
+     */
+    @Volatile
+    private var toDescribe = 0
+
+    /** Called when the chosen shape changes, so the next pass explains itself once more. */
+    fun describeNextIcons() {
+        toDescribe = DESCRIBE_LIMIT
+    }
+
+    private fun describe(drawable: Drawable, analysis: Analysis, shape: IconShape, size: Int) {
+        if (toDescribe <= 0) return
+        toDescribe--
+
+        val adaptive = drawable as? AdaptiveIconDrawable
+        EdenLog.i(
+            TAG,
+            "shaping ${drawable.javaClass.simpleName} to $shape at ${size}px: " +
+                "adaptive=${adaptive != null} " +
+                "background=${adaptive?.background?.javaClass?.simpleName} " +
+                "foreground=${adaptive?.foreground?.javaClass?.simpleName} " +
+                "content=${analysis.content.width()}x${analysis.content.height()} " +
+                "fillsItsBox=${analysis.fillsItsBox}",
+        )
     }
 
     // ---- clock hands -----------------------------------------------------------------------------
@@ -392,6 +459,11 @@ object IconShaper {
         }
 
     // ---- constants -------------------------------------------------------------------------------
+
+    private const val TAG = "IconShaper"
+
+    /** How many icons a shape change is explained over. See [describeNextIcons]. */
+    private const val DESCRIBE_LIMIT = 3
 
     /** Grid the artwork is measured on. */
     private const val SAMPLE = 32

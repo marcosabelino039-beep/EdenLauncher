@@ -131,11 +131,44 @@ abstract class LauncherDao {
     @Query("DELETE FROM workspaceScreens")
     abstract suspend fun clearScreens()
 
-    /** Rewrites the page order atomically so a crash mid-reorder cannot leave gaps. */
+    /** Page ids that still have something placed on them. */
+    @Query("SELECT DISTINCT screen FROM favorites WHERE container = :desktopContainer")
+    abstract suspend fun screenIdsWithItems(desktopContainer: Long): List<Long>
+
+    /**
+     * Rewrites the page order atomically so a crash mid-reorder cannot leave gaps.
+     *
+     * A page that is not in [screens] but still has items on it is kept, appended after them, and
+     * its id is returned. Reordering is not how a page is deleted - [deleteScreenWithContents] is -
+     * so a page missing from the list here means the caller was working from a stale picture of the
+     * workspace, and wiping the row would strand everything on it: rows pointing at a page that no
+     * longer exists, invisible on every screen and impossible to get back.
+     *
+     * This is exactly what a drop on the new trailing page used to do. The drop wrote the page and
+     * its item from a coroutine, the end of the same drag rewrote the page list from the workspace
+     * synchronously, and whichever finished second decided whether the item still had a page to sit
+     * on. See `Launcher.commitScreenChanges`, which now waits for the drop.
+     */
     @Transaction
-    open suspend fun replaceScreens(screens: List<WorkspaceScreenEntity>) {
+    open suspend fun replaceScreens(
+        screens: List<WorkspaceScreenEntity>,
+        desktopContainer: Long,
+        modified: Long,
+    ): List<Long> {
+        val listed = screens.mapTo(HashSet()) { it.id }
+        val rescued = screenIdsWithItems(desktopContainer).filter { it !in listed }.sorted()
+
         clearScreens()
-        insertScreens(screens)
+        insertScreens(
+            screens + rescued.mapIndexed { index, id ->
+                WorkspaceScreenEntity(
+                    id = id,
+                    screenRank = screens.size + index,
+                    modified = modified,
+                )
+            },
+        )
+        return rescued
     }
 
     /**
