@@ -3,6 +3,7 @@ package app.auriel.edenlauncher.settings
 import android.content.Context
 import android.content.SharedPreferences
 import app.auriel.edenlauncher.icons.IconShape
+import app.auriel.edenlauncher.notification.DotColour
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -77,6 +78,34 @@ class LauncherPrefs(context: Context) {
     var rememberDrawerPosition: Boolean
         get() = prefs.getBoolean(KEY_DRAWER_REMEMBER_POSITION, false)
         set(value) = prefs.edit().putBoolean(KEY_DRAWER_REMEMBER_POSITION, value).apply()
+
+    /**
+     * Whether an app with something waiting gets a dot on its icon.
+     *
+     * Off by default, and it is the one setting in Eden that has to be: turning it on is a request
+     * for notification access, which is the widest permission the launcher can hold and the only
+     * one the user has to grant on a screen of its own. A launcher that arrived asking for it
+     * would be a launcher asking to read every message on the phone before it had done anything.
+     *
+     * The setting is only Eden's half of the answer. Android's own phone-wide dots switch and the
+     * access grant both have to agree; see
+     * [app.auriel.edenlauncher.notification.NotificationDots].
+     */
+    var notificationDots: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFICATION_DOTS, false)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFICATION_DOTS, value).apply()
+
+    /**
+     * What colour a notification dot is drawn in. See
+     * [app.auriel.edenlauncher.notification.DotColour].
+     *
+     * Stored by name rather than as a colour value, so that adjusting one of the sixteen in a later
+     * release adjusts it for everyone who picked it, instead of leaving them on a number nothing
+     * refers to any more.
+     */
+    var notificationDotColour: DotColour
+        get() = DotColour.fromName(prefs.getString(KEY_DOT_COLOUR, null))
+        set(value) = prefs.edit().putString(KEY_DOT_COLOUR, value.name).apply()
 
     /**
      * Drawer background opacity, 0 (fully transparent, wallpaper shows through) to 100 (opaque).
@@ -361,6 +390,11 @@ class LauncherPrefs(context: Context) {
     fun drawerSearchAtBottomFlow(): Flow<Boolean> =
         keyFlow(KEY_DRAWER_SEARCH_BOTTOM) { drawerSearchAtBottom }
 
+    fun notificationDotsFlow(): Flow<Boolean> = keyFlow(KEY_NOTIFICATION_DOTS) { notificationDots }
+
+    fun notificationDotColourFlow(): Flow<DotColour> =
+        keyFlow(KEY_DOT_COLOUR) { notificationDotColour }
+
     private fun <T> keyFlow(key: String, read: () -> T): Flow<T> = callbackFlow {
         trySend(read())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changed ->
@@ -406,6 +440,8 @@ class LauncherPrefs(context: Context) {
         private const val KEY_DRAWER_SEARCH_BOTTOM = "app_drawer_search_bottom"
         private const val KEY_DRAWER_KEYBOARD = "app_drawer_open_keyboard"
         private const val KEY_DRAWER_REMEMBER_POSITION = "app_drawer_remember_position"
+        private const val KEY_NOTIFICATION_DOTS = "notification_dots"
+        private const val KEY_DOT_COLOUR = "notification_dot_colour"
         private const val KEY_GRID_COLUMNS = "workspace_columns"
         private const val KEY_GRID_ROWS = "workspace_rows"
         private const val KEY_DRAWER_COLUMNS = "drawer_columns"

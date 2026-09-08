@@ -257,6 +257,50 @@ sit between cells is a widget that can overlap an icon - and every candidate siz
 the page's occupancy before it is applied. The widget's own cells are released from that occupancy
 while the frame is up, or every candidate overlapping where it already is would be rejected.
 
+### What a host owes a provider
+
+A widget renders whether or not the launcher holds up its end. It just does not render what the
+author meant, and the result reads as a broken widget rather than an incomplete host - which is why
+all of this was found by somebody reporting that a Google widget looked wrong.
+
+**Its size, before it is asked for views.** A bind with no options tells the provider nothing, so it
+falls back to the size declared in its manifest - a minimum, not a measurement. Anything that picks
+a layout by size then picks the wrong one, and the widget's *first* frame is the one the user judges
+it by. `WidgetSizes.optionsFor` builds the bundle - the four numbers the platform has always taken,
+plus `OPTION_APPWIDGET_SIZES` on API 31 and up with one entry per orientation - and
+`WidgetBinding.bindIfAllowed` passes it, as does the intent for the system's bind prompt. Google's
+own widgets are the clearest case because they ship the most layouts to choose between.
+
+**Corners it did not ask to have rounded.** A widget that declares exactly one
+`android.R.id.background` and clips to its own outline has said "these are my corners", and Android
+12 made that a contract. Until v0.7.0 Eden detected that and then ignored it: the enforcement fell
+through to clipping the host view's whole bounds *to the same radius*, taking a second bite out of
+the same corner. On a background that is a pill rather than a rounded square - which is what the
+Google search widget ships - that is a widget with its ends sliced off.
+`RoundedCorners.hasOptedOut` is now honoured, and the fallback outline is square and alpha-zero, as
+AOSP's is: still clipped to its cell, rounded no further.
+
+`RoundedCorners.findBackground` also now requires *exactly one* match on that id, as AOSP does. Two
+or more is not a background, it is a layout reusing an id, and guessing between them is how a clip
+ends up around a widget's content.
+
+**Turning it over.** A widget with a stack or a flipper in it does not animate itself; the provider
+names the view in `autoAdvanceViewId` and the *host* is expected to advance it on a timer. Nothing
+in the platform does this on a host's behalf, so a launcher that never implements it shows the first
+page of every such widget forever - which is not obviously a bug, and is exactly what it looks like
+when a news or photo widget "stopped working". Twenty seconds, staggered per widget so a page of
+them does not do every inflation on one frame.
+
+**Not taking the launcher down with it.** `dispatchRestoreInstanceState` is guarded, because a
+provider can replace its whole layout between the state being saved and read back and the platform
+then restores a `SparseArray` keyed by ids that mean something else. That throws inside the
+launcher's own recreation, so a rotation takes the home screen with it. Losing a widget's scroll
+position is the cheaper outcome.
+
+**Inflating off the main thread.** `setExecutor` on API 31 and up, on a two-thread daemon pool.
+Inflation is bursty - a page of widgets at bind, nothing for minutes - so a pool that keeps the
+process alive waiting for more work would be the background cost this project exists to not have.
+
 ### Stacks
 
 Several widgets in one block of the grid, one on top, changed with a swipe up or down. A stack is
@@ -308,6 +352,75 @@ a folder is. Widgets stored before hosting existed come back bound.
 given a typed field, so it carries its `ItemInfo` as a tag - which is what AOSP does for every
 workspace child. Without it `findViewFor` cannot locate a widget, and resize, remove and move all
 silently do nothing.
+
+## Notification dots
+
+A dot is one bit per app - something is waiting, or nothing is - and getting that bit costs the
+widest permission in the project. Android publishes no feed of "which apps have something waiting";
+a launcher that wants a dot has to bind a `NotificationListenerService` and be handed every
+notification on the phone, in full, including the text. There is no narrower API and there never
+has been.
+
+So the reduction happens immediately, in one file. `EdenNotificationListener` turns a
+`StatusBarNotification` into a package name and a key and hands `NotificationDots` those two things;
+nothing else leaves it. Nothing is written to disk, nothing reaches `EdenLog`, and the launcher has
+no network code to send it anywhere. That is the whole privacy story and it is deliberately short
+enough to check by reading one file.
+
+**Three switches, three owners.** A dot is drawn only if the user turned it on in Eden, granted
+notification access to the system, and left Android's own phone-wide `notification_badging` setting
+alone - and, per notification, only if the posting channel's `canShowBadge` says so. Eden owns the
+first and honours the rest. Overruling any of them would mean drawing a dot on a screen where the
+user had already said they did not want one, which is worse than not having the feature.
+
+**Off costs nothing.** The service is declared in the manifest whether or not the feature is on,
+because a component the system cannot see is a component the user cannot grant access to. Turning
+dots off calls `requestUnbind`, so the system stops binding it rather than binding it to do nothing
+- a bound listener is a process the system keeps alive to hand notifications to, and that is exactly
+the background cost this project exists to not have. `NotificationDots.initialise` exists because
+the service can be the first thing in the process to ask the question: the system binds listeners at
+boot, before any launcher activity has run, and a field left at its default would have the service
+unbind itself from a user who had turned dots on months earlier.
+
+**Pull, not push.** `NotificationDots` tells the launcher that *something* changed and the launcher
+asks every icon currently on screen what that means for it. The alternative is a subscription per
+icon, renewed on every rebind and every recycle, and the one that is missed is a leaked view.
+
+### Drawing the dot
+
+`DotRenderer` places the dot on the edge of the outline the user chose rather than in the corner of
+the icon's box: a dot pinned to a corner floats off a circle and buries itself in a diamond. The
+outline is sampled and the point furthest towards the top-right corner wins - `x - y` maximised, or
+`-x - y` in a right-to-left layout, where the dot follows the reading direction as it does in AOSP.
+
+AOSP finds the same point by intersecting the outline with a sliver of a triangle aimed at the
+corner and taking the first point of the result, which is cheaper. It was tried first and abandoned:
+the point a `Path.Op.INTERSECT` begins its contour at is not defined to be any particular end of it,
+and on the development device it came back with the far end - every dot on the top *left* of its
+icon. The sample is a hundred and eighty `getPosTan` calls once per shape, per size, per colour.
+
+Two guards are worth naming, because both were bugs first:
+
+- **The position is a fraction of the path's own bounds**, not of the box it was asked to fill. The
+  generated shapes fill it exactly; the platform's adaptive mask is another process's path, scaled
+  by an assumption about the units it arrives in, and that assumption is not one to build on.
+- **The dot is clamped to the view's size, which the caller passes in.** AOSP reads
+  `canvas.getClipBounds()` for this. The clip is reported in the canvas's coordinate space, and for
+  a `TextView` that space is offset by the view's scroll - on a drawer entry whose `scrollX` had run
+  away to 524197 it came back as `Rect(524197, 0 - 524400, 304)`: the right size, at an offset of
+  half a million, and clamping into it threw every dot off the side of the phone.
+
+The other half of that is in `BubbleTextView.onDraw`, which translates by `scrollX`/`scrollY` before
+drawing and back afterwards - exactly what AOSP's `drawDotIfNecessary` does, and for exactly this
+reason. `TextView` positions its own content at `compoundPaddingLeft + scrollX`, so "the top of the
+icon" in view coordinates and on the canvas are two different points the moment the view has
+scrolled at all.
+
+Sixteen colours, in `DotColour`, stored by name. A colour wheel is a decision with no wrong answers
+and therefore no answer; sixteen is a palette, chosen at a glance, and every one of them is legible
+on top of an app icon. The ring behind the dot is dark behind a light colour and light behind a dark
+one, picked by relative luminance - white and black are both in the palette and each needs the
+opposite of what the other does.
 
 ## The app drawer
 
@@ -504,6 +617,20 @@ Icons are resolved during the load, so changing the pack changes nothing until s
 they differ - the same shape as the grid-signature check next to it, but a rebind rather than a
 recreate, because the views are still the right shape and only hold the wrong bitmaps.
 
+### What a tick is allowed to touch
+
+A clock icon is redrawn once a minute for as long as the launcher is in the foreground, forever.
+Until v0.7.0 each of those ticks rebound every icon on every page and regenerated every folder tile
+- a full reset of the home screen, once a minute, to move one minute hand.
+
+`refreshPlacedIcons` now takes the set of items that actually changed, and null still means all of
+them, which is what an icon pack or a shape change needs. Membership is by identity rather than by
+value, because `ItemInfo` deliberately defines no equality: these are the same objects the loader
+produced, and two apps with the same title are still two apps. The set is built once per clock scan
+rather than once per tick, so a tick allocates nothing. Folder tiles are the expensive half - four
+bitmaps composited and masked - so a folder holding nothing that changed is left alone rather than
+rebuilt to look exactly as it did.
+
 ## Packages appearing and disappearing
 
 A `LauncherApps.Callback` registered for the whole life of the activity, not between `onStart` and
@@ -516,6 +643,30 @@ and go to `LauncherModel.purgePackages`, which deletes the rows - including fold
 the folder itself if that empties it. A cold load takes the opposite view and only flags a missing
 item disabled, because there the cause might be an unmounted card; here `LauncherApps` has said the
 package was removed, and it does not say that for an update or an unmount.
+
+## Type
+
+Open Sans for words, JetBrains Mono for the log. Two weights of the first and one of the second: a
+launcher sets app names, section headings and short explanations, it never sets a paragraph, and
+every face that ships is a face on every install.
+
+Applying it is the interesting part, because almost every view in this project is built in Kotlin
+rather than inflated - there is no layout file to put a `fontFamily` in, and a `setTypeface` call at
+several dozen construction sites is one that gets forgotten at the next one. Setting
+`android:fontFamily` on the theme does not help either: that is read by `TextAppearance`, which a
+bare programmatic widget never consults.
+
+What does work is overriding the *default style attributes*. `TextView(context)` resolves
+`android:textViewStyle` from the theme, `EditText` resolves `editTextStyle`, and so on down the
+list, so five lines in `themes.xml` reach every view the launcher will ever construct, including
+ones nobody has written yet. `res/font/eden_sans.xml` is declared as a family with real weights, so
+`textStyle="bold"` picks the semibold cut rather than having the platform synthesise one by smearing
+the regular sideways - including from inside platform widgets Eden does not get to edit.
+
+The log viewer sets `eden_mono` explicitly and falls back to `Typeface.MONOSPACE` if the font will
+not load, which is what it used before. A log is read to find one line in a thousand, and it is read
+at the moment something has gone wrong and a user is about to copy a line of it into an email -
+which is the moment a `1` that looks like an `l` costs somebody an afternoon.
 
 ## The log
 

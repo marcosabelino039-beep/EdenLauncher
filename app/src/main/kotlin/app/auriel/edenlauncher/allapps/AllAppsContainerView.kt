@@ -19,6 +19,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.model.AppInfo
+import app.auriel.edenlauncher.model.ItemInfo
 import app.auriel.edenlauncher.settings.AppDrawerMode
 import app.auriel.edenlauncher.views.Insettable
 import app.auriel.edenlauncher.views.PageIndicatorDots
@@ -219,8 +220,13 @@ class AllAppsContainerView @JvmOverloads constructor(
      * Called batch by batch while an icon pack is applied after the drawer was built; see
      * [AppDrawerView.refreshIcons] for why this is not a resubmit.
      */
-    fun refreshIcons() {
-        drawerView?.refreshIcons()
+    fun refreshIcons(only: Set<ItemInfo>? = null) {
+        drawerView?.refreshIcons(only)
+    }
+
+    /** The set of apps with something waiting has changed; see [BubbleTextView.refreshDot]. */
+    fun refreshDots() {
+        drawerView?.refreshDots()
     }
 
     /**

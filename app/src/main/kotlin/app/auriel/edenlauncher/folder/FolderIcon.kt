@@ -18,9 +18,11 @@ import android.widget.TextView
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.device.DeviceProfile
+import app.auriel.edenlauncher.icons.DotRenderer
 import app.auriel.edenlauncher.icons.IconShape
 import app.auriel.edenlauncher.model.FolderInfo
 import app.auriel.edenlauncher.model.ShortcutInfo
+import app.auriel.edenlauncher.notification.NotificationDots
 import app.auriel.edenlauncher.settings.LauncherPrefs
 
 /**
@@ -54,9 +56,17 @@ class FolderIcon @JvmOverloads constructor(
      * something that was missed. Read once per view: a change to it reloads the launcher, which
      * builds these again.
      */
-    private val shape: IconShape = LauncherPrefs(context).iconShape
+    private val prefs = LauncherPrefs(context)
+
+    private val shape: IconShape = prefs.iconShape
 
     private val shapePath = Path()
+
+    /** True when anything inside the folder has a notification waiting. */
+    private var hasDot = false
+
+    private val dotBounds = Rect()
+
     private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
     }
@@ -84,6 +94,48 @@ class FolderIcon @JvmOverloads constructor(
         text = info.title ?: resources.getString(R.string.folder_name)
         contentDescription = text
         refreshPreview()
+        refreshDot()
+    }
+
+    /**
+     * Re-reads whether anything inside has a notification.
+     *
+     * A closed folder shows one dot however many of its apps are waiting. A count would be a
+     * number the user has to open the folder to make sense of, and a dot per app would be a tile
+     * covered in dots - the point of the folder was to stop showing the apps individually.
+     */
+    fun refreshDot() {
+        val info = folderInfo
+        val dotted = info != null && info.contents.any { child ->
+            NotificationDots.hasDot(child.targetComponent?.packageName, child.user)
+        }
+        // Redrawn even when the answer is unchanged: the colour is read at draw time and may not
+        // be. See BubbleTextView.refreshDot.
+        hasDot = dotted
+        if (dotted) invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (!hasDot) return
+
+        val left = (width - previewSize) / 2
+        dotBounds.set(left, paddingTop, left + previewSize, paddingTop + previewSize)
+
+        // A folder tile is a TextView too; see BubbleTextView.onDraw for why the scroll is undone.
+        val scrollX = scrollX
+        val scrollY = scrollY
+        canvas.translate(scrollX.toFloat(), scrollY.toFloat())
+        DotRenderer.forShape(context, shape, prefs.notificationDotColour, previewSize)
+            .draw(
+                canvas,
+                dotBounds,
+                width,
+                height,
+                1f,
+                leftAlign = layoutDirection == LAYOUT_DIRECTION_RTL,
+            )
+        canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
     }
 
     /** Rebuilds the tile bitmap from the first few contents. */

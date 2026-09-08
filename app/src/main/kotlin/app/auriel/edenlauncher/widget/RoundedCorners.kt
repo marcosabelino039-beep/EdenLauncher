@@ -41,21 +41,40 @@ object RoundedCorners {
     }
 
     /**
-     * The view whose rectangle should be clipped, or null when the widget has opted out.
+     * The view whose rectangle should be clipped, or null when there is nothing to clip to.
      *
-     * Walks at most one background id and then the first drawing descendant, which is what AOSP
+     * A widget that declares *exactly one* `android.R.id.background` has said where its background
+     * is and that is the answer. Two or more is not a background, it is a layout that happens to
+     * reuse the id, and guessing between them is how a clip ends up around a widget's content -
+     * so the search falls through to the shape of the view tree instead, which is what AOSP
      * settled on after finding that deeper searches picked up content rather than backgrounds.
      */
     fun findBackground(host: View): View? {
-        val tagged = findViewWithBackgroundId(host)
-        if (tagged != null) {
-            // The widget rounded itself already; clipping again would cut into its own corners.
-            return if (tagged.clipToOutline) null else tagged
-        }
+        val tagged = ArrayList<View>(2)
+        accumulateBackgroundIds(host, tagged)
+        if (tagged.size == 1) return tagged[0]
+
         val group = host as? ViewGroup ?: return host
         if (group.childCount == 0) return host
         return firstDrawingView(group.getChildAt(0)) ?: host
     }
+
+    /**
+     * True when the widget has rounded itself and the launcher must not round it again.
+     *
+     * The contract Android 12 introduced: a view with `android.R.id.background` that clips to its
+     * own outline is a widget saying "these are my corners". Rounding that a second time takes a
+     * second bite out of the same corner - the launcher's radius applied to the *outer* bounds,
+     * cutting through whatever the widget had drawn inside its own inset background. On a
+     * background that is a pill rather than a rounded square, which is what Google's search and
+     * At a Glance widgets ship, that reads as a widget with its ends sliced off.
+     *
+     * Until v0.7.0 this was detected and then ignored: the enforcement fell through to clipping
+     * the host view's full bounds *to the same radius*, which is the double-rounding it was meant
+     * to avoid. The widget is now left alone, clipped square to its cell and no further.
+     */
+    fun hasOptedOut(background: View): Boolean =
+        background.id == android.R.id.background && background.clipToOutline
 
     /** Writes [background]'s bounds into [out], in [host]'s coordinate space. */
     fun boundsIn(host: View, background: View, out: Rect) {
@@ -74,13 +93,18 @@ object RoundedCorners {
             context.resources.displayMetrics,
         )
 
-    private fun findViewWithBackgroundId(view: View): View? {
-        if (view.id == android.R.id.background) return view
-        val group = view as? ViewGroup ?: return null
-        for (i in 0 until group.childCount) {
-            findViewWithBackgroundId(group.getChildAt(i))?.let { return it }
+    /** Collects every `android.R.id.background` in the tree, not descending into one it found. */
+    private fun accumulateBackgroundIds(view: View, into: MutableList<View>) {
+        if (view.id == android.R.id.background) {
+            into.add(view)
+            return
         }
-        return null
+        val group = view as? ViewGroup ?: return
+        for (i in 0 until group.childCount) {
+            accumulateBackgroundIds(group.getChildAt(i), into)
+            // Two is already more than one, and the caller only asks whether there was exactly one.
+            if (into.size > 1) return
+        }
     }
 
     /**

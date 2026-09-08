@@ -5,6 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.model.AppInfo
+import app.auriel.edenlauncher.model.ItemInfo
 import app.auriel.edenlauncher.views.BubbleTextView
 import app.auriel.edenlauncher.views.CellLayout
 import app.auriel.edenlauncher.views.PagedView
@@ -85,12 +86,23 @@ class AppDrawerHorizontal(context: Context) : PagedView(context), AppDrawerView 
      * Every page is built up front here, so every entry is walked - there is no recycling to pick
      * up a changed bitmap later.
      */
-    override fun refreshIcons() {
+    override fun refreshIcons(only: Set<ItemInfo>?) {
+        forEachIcon { icon ->
+            val info = icon.itemInfo as? AppInfo ?: return@forEachIcon
+            if (only != null && info !in only) return@forEachIcon
+            icon.setIconBitmap(info.icon)
+        }
+    }
+
+    override fun refreshDots() {
+        forEachIcon { it.refreshDot() }
+    }
+
+    private inline fun forEachIcon(action: (BubbleTextView) -> Unit) {
         for (p in 0 until childCount) {
             val page = getChildAt(p) as? CellLayout ?: continue
             for (i in 0 until page.childCount) {
-                val icon = page.getChildAt(i) as? BubbleTextView ?: continue
-                (icon.itemInfo as? AppInfo)?.let { icon.setIconBitmap(it.icon) }
+                (page.getChildAt(i) as? BubbleTextView)?.let(action)
             }
         }
     }

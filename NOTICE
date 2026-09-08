@@ -66,3 +66,25 @@ its KDoc header.
 
 The reference checkouts under .ref/ are unmodified AOSP sources, used for reading
 only. They are excluded from version control and are not compiled into Eden.
+
+-------------------------------------------------------------------------------
+Bundled fonts
+-------------------------------------------------------------------------------
+
+  app/src/main/res/font/open_sans_regular.ttf
+  app/src/main/res/font/open_sans_semibold.ttf
+
+    Open Sans, Copyright 2020 The Open Sans Project Authors
+    (https://github.com/googlefonts/opensans)
+    Licensed under the SIL Open Font License, Version 1.1.
+
+  app/src/main/res/font/jetbrains_mono_regular.ttf
+
+    JetBrains Mono, Copyright 2020 The JetBrains Mono Project Authors
+    (https://github.com/JetBrains/JetBrainsMono)
+    Licensed under the SIL Open Font License, Version 1.1.
+
+  Both are shipped unmodified. The OFL permits bundling in an application and
+  does not require the application to adopt the same licence; it does require
+  that the fonts are not sold on their own and that a font derived from either
+  is not published under its original name. Eden does neither.

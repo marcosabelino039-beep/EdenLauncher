@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    JetBrains Mono, for the one screen that shows text a machine wrote.
+
+    The log viewer is a column of timestamps, tags and stack traces: things that line up when the
+    characters are the same width and stop lining up when they are not. It is also the screen a
+    user is reading when something has gone wrong and they are about to copy a line of it into an
+    email, which is the moment a 1 that looks like an l costs somebody an afternoon.
+
+    One weight. Nothing in a log is emphasised.
+-->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:font="@font/jetbrains_mono_regular"
+        android:fontStyle="normal"
+        android:fontWeight="400" />
+</font-family>

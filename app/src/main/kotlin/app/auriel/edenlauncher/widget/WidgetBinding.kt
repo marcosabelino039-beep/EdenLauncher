@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProviderInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import app.auriel.edenlauncher.util.EdenLog
 
 private const val TAG = "WidgetBinding"
@@ -61,19 +62,49 @@ object WidgetBinding {
      *
      * False here is not an error - it is the ordinary answer for a third-party provider the user
      * has not approved yet, and the caller's next move is [bindPermissionIntent].
+     *
+     * [options] is the size the widget is about to be given; see [WidgetSizes.optionsFor] for why
+     * it is worth knowing at bind time rather than a moment later.
      */
-    fun bindIfAllowed(context: Context, appWidgetId: Int, provider: ComponentName): Boolean {
+    fun bindIfAllowed(
+        context: Context,
+        appWidgetId: Int,
+        provider: ComponentName,
+        options: Bundle? = null,
+    ): Boolean {
         val manager = AppWidgetManager.getInstance(context) ?: return false
-        return runCatching { manager.bindAppWidgetIdIfAllowed(appWidgetId, provider) }
+        return runCatching {
+            manager.bindAppWidgetIdIfAllowed(appWidgetId, currentProfile, provider, options)
+        }
             .onFailure { EdenLog.w(TAG, "bindAppWidgetIdIfAllowed failed for $provider", it) }
             .getOrDefault(false)
     }
 
-    /** The system's "allow this launcher to add widgets" prompt, started for a result. */
-    fun bindPermissionIntent(appWidgetId: Int, provider: ComponentName): Intent =
+    /**
+     * The system's "allow this launcher to add widgets" prompt, started for a result.
+     *
+     * Carries the same [options] as the silent route: the prompt binds on the launcher's behalf
+     * when it is granted, and a widget added by way of the prompt would otherwise be the only one
+     * that never learnt its size.
+     */
+    fun bindPermissionIntent(
+        appWidgetId: Int,
+        provider: ComponentName,
+        options: Bundle? = null,
+    ): Intent =
         Intent(AppWidgetManager.ACTION_APPWIDGET_BIND)
             .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
             .putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider)
+            .apply { if (options != null) putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, options) }
+
+    /**
+     * The profile a provider belongs to.
+     *
+     * Only the current one today - Eden lists no work-profile widgets - but the four-argument
+     * `bindAppWidgetIdIfAllowed` takes a handle and the three-argument form does not take options
+     * at all, so the profile has to be named to say anything about size.
+     */
+    private val currentProfile: android.os.UserHandle get() = android.os.Process.myUserHandle()
 
     /**
      * Runs the provider's own configuration screen if it declared one.

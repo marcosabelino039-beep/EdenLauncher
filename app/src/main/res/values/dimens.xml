@@ -50,4 +50,8 @@
     <!-- Open folder panel. -->
     <dimen name="folder_corner_radius">20dp</dimen>
     <dimen name="folder_padding">12dp</dimen>
+
+    <!-- One of the sixteen notification dot colours, and the space between two of them. -->
+    <dimen name="dot_swatch_size">40dp</dimen>
+    <dimen name="dot_swatch_gap">4dp</dimen>
 </resources>

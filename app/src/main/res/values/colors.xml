@@ -30,6 +30,39 @@
     <color name="workspace_icon_text">#F2FBF6</color>
     <color name="workspace_icon_text_shadow">#B3000000</color>
 
+    <!--
+        The notification dot, and the ring that keeps it visible on top of an icon that happens to
+        be the same green. Deliberately the brightest colour in the palette: it is the one thing on
+        the home screen whose entire job is to be noticed.
+    -->
+    <color name="notification_dot_ring_dark">#CC000000</color>
+    <color name="notification_dot_ring_light">#CCFFFFFF</color>
+
+    <!--
+        The sixteen a dot may be. See DotColour for why there are sixteen and why they look like
+        this: a four-bit palette, chosen to be told apart rather than to go together, because a dot
+        that harmonises with the icon underneath it is a dot nobody notices.
+
+        Green is Eden's own and is the default. The rest are the palette's, kept at full
+        saturation - a muted version of one of these reads as a smudge on the artwork.
+    -->
+    <color name="dot_green">@color/eden_leaf</color>
+    <color name="dot_lime">#A8E000</color>
+    <color name="dot_yellow">#FFE000</color>
+    <color name="dot_orange">#FF8C1A</color>
+    <color name="dot_red">#F03028</color>
+    <color name="dot_maroon">#A01820</color>
+    <color name="dot_magenta">#FF3CC0</color>
+    <color name="dot_purple">#A050E8</color>
+    <color name="dot_navy">#2440C8</color>
+    <color name="dot_blue">#3C94FF</color>
+    <color name="dot_cyan">#3CE0E0</color>
+    <color name="dot_teal">#00B49A</color>
+    <color name="dot_brown">#9C6432</color>
+    <color name="dot_white">#FFFFFF</color>
+    <color name="dot_grey">#9AA5A0</color>
+    <color name="dot_black">#101414</color>
+
     <color name="options_sheet_background">#F01B241E</color>
     <color name="folder_background">#EB1B241E</color>
     <color name="folder_preview_background">#A6C7E9D2</color>
