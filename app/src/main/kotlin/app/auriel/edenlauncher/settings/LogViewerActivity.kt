@@ -62,7 +62,12 @@ class LogViewerActivity : Activity() {
 
         output = TextView(this).apply {
             setTextIsSelectable(true)
-            typeface = android.graphics.Typeface.MONOSPACE
+            // JetBrains Mono, not the platform's monospace: a log is read to find one line in a
+            // thousand, and the digits and the l/1/I of a stack trace have to be told apart at a
+            // glance. Falls back to whatever the device calls monospace if the font will not load,
+            // which is what the platform did here before.
+            typeface = runCatching { resources.getFont(R.font.eden_mono) }
+                .getOrDefault(android.graphics.Typeface.MONOSPACE)
             setTextColor(getColor(R.color.settings_text))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, LOG_TEXT_SP)
             setPadding(padding, padding, padding, padding)

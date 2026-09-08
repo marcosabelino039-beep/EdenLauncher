@@ -35,6 +35,7 @@ import app.auriel.edenlauncher.model.WidgetStackInfo
 import app.auriel.edenlauncher.settings.LauncherPrefs
 import app.auriel.edenlauncher.settings.SettingsActivity
 import app.auriel.edenlauncher.util.EdenLog
+import app.auriel.edenlauncher.notification.NotificationDots
 import app.auriel.edenlauncher.views.BubbleTextView
 import app.auriel.edenlauncher.views.ButtonDropTarget
 import app.auriel.edenlauncher.views.CellLayout
@@ -118,6 +119,14 @@ class Launcher : Activity(), ItemPlacementHandler {
 
     /** The bound items that draw a clock, once the scan has found them. Null until it has. */
     private var clockItems: LauncherModel.ClockItems? = null
+
+    /**
+     * The same clocks as [clockItems], as one set for membership tests.
+     *
+     * Held rather than built per tick: a minute tick should not allocate, and this is the argument
+     * to every [refreshPlacedIcons] the tick makes.
+     */
+    private var clockViews: Set<ItemInfo>? = null
 
     /** The scan for clock apps, and the redraw it feeds. Both belong to the current bind. */
     private var clockScanJob: Job? = null
@@ -500,6 +509,21 @@ class Launcher : Activity(), ItemPlacementHandler {
         prefs.appDrawerOpacityFlow()
             .onEach { allApps.setBackgroundOpacity(it) }
             .launchIn(scope)
+        // Turning dots on or off in settings binds or unbinds the listener; the launcher only has
+        // to redraw what is on screen once the store agrees.
+        prefs.notificationDotsFlow()
+            .onEach {
+                NotificationDots.setEnabled(this, it)
+                refreshNotificationDots()
+            }
+            .launchIn(scope)
+
+        // A colour change leaves every dot exactly where it was and the wrong colour, so the same
+        // sweep is enough; the views read the new colour when they redraw.
+        prefs.notificationDotColourFlow()
+            .onEach { refreshNotificationDots() }
+            .launchIn(scope)
+
         prefs.drawerSearchAtBottomFlow()
             .onEach { allApps.setSearchAtBottom(it) }
             .launchIn(scope)
@@ -627,26 +651,87 @@ class Launcher : Activity(), ItemPlacementHandler {
         }
     }
 
-    /** Re-reads the icon off every bound workspace and dock view. */
-    private fun refreshPlacedIcons() {
-        refreshIconsIn(binding.hotseat)
+    /**
+     * Re-reads the icon off the bound workspace and dock views, or off [only] of them.
+     *
+     * Null means all of them, which is what an icon pack or a shape change needs: every bitmap on
+     * the screen is now wrong. A set means exactly those, which is what a clock tick needs.
+     *
+     * The distinction is not a micro-optimisation. Clock icons are redrawn once a minute for as
+     * long as the launcher is in the foreground, and until v0.7.0 each of those ticks rebound
+     * every icon on every page and regenerated every folder tile - a full reset of the home
+     * screen, once a minute, to move one minute hand. Membership is by identity rather than value
+     * because [ItemInfo] deliberately does not define equality: these are the same objects the
+     * loader produced, and two apps with the same title are still two apps.
+     */
+    private fun refreshPlacedIcons(only: Set<ItemInfo>? = null) {
+        refreshIconsIn(binding.hotseat, only)
         val workspace = binding.workspace
         for (i in 0 until workspace.childCount) {
-            (workspace.getChildAt(i) as? CellLayout)?.let { refreshIconsIn(it) }
+            (workspace.getChildAt(i) as? CellLayout)?.let { refreshIconsIn(it, only) }
         }
     }
 
-    private fun refreshIconsIn(page: android.view.ViewGroup) {
+    private fun refreshIconsIn(page: android.view.ViewGroup, only: Set<ItemInfo>?) {
         for (i in 0 until page.childCount) {
             when (val child = page.getChildAt(i)) {
-                is BubbleTextView -> (child.itemInfo as? ShortcutInfo)?.let {
-                    child.setIconBitmap(it.icon)
+                is BubbleTextView -> {
+                    val info = child.itemInfo as? ShortcutInfo
+                    if (info != null && (only == null || info in only)) {
+                        child.setIconBitmap(info.icon)
+                    }
                 }
 
                 // A folder tile is drawn from its contents, and the open folder listens to the same
-                // notification, so one call updates both.
-                is FolderIcon -> child.folderInfo?.notifyItemsChanged()
+                // notification, so one call updates both. Regenerating that tile means compositing
+                // four bitmaps and masking the result, so a folder holding nothing that changed is
+                // left alone rather than rebuilt to look exactly as it did.
+                is FolderIcon -> {
+                    val contents = child.folderInfo?.contents
+                    if (contents != null && (only == null || contents.any { it in only })) {
+                        child.folderInfo?.notifyItemsChanged()
+                    }
+                }
 
+                else -> Unit
+            }
+        }
+    }
+
+    // ---- notification dots -----------------------------------------------------------------------
+
+    /**
+     * Told once that something changed; asks every icon on screen what that means for it.
+     *
+     * The alternative - the notification store holding a reference to each view that wants to know
+     * - is a subscription per icon, renewed on every rebind and every recycle, and one that is
+     * missed is a leaked view. A walk of what is currently on screen is a few hundred field reads
+     * and happens only when a notification is actually posted or dismissed.
+     */
+    /**
+     * Held as a field rather than written inline at both call sites.
+     *
+     * [NotificationDots.removeListener] compares references, and two identical lambdas are two
+     * different objects: registering one and unregistering another would leave the launcher
+     * subscribed for the life of the process, redrawing a home screen nobody is looking at.
+     */
+    private val dotListener: () -> Unit = { refreshNotificationDots() }
+
+    private fun refreshNotificationDots() {
+        refreshDotsIn(binding.hotseat)
+        val workspace = binding.workspace
+        for (i in 0 until workspace.childCount) {
+            (workspace.getChildAt(i) as? CellLayout)?.let { refreshDotsIn(it) }
+        }
+        openFolder?.refreshDots()
+        allApps.refreshDots()
+    }
+
+    private fun refreshDotsIn(page: android.view.ViewGroup) {
+        for (i in 0 until page.childCount) {
+            when (val child = page.getChildAt(i)) {
+                is BubbleTextView -> child.refreshDot()
+                is FolderIcon -> child.refreshDot()
                 else -> Unit
             }
         }
@@ -669,6 +754,7 @@ class Launcher : Activity(), ItemPlacementHandler {
         clockScanJob?.cancel()
         clockTickJob?.cancel()
         clockItems = null
+        clockViews = null
 
         clockScanJob = scope.launch {
             iconThemeJob?.join()
@@ -681,6 +767,12 @@ class Launcher : Activity(), ItemPlacementHandler {
             if (found.isEmpty) return@launch
 
             clockItems = found
+            // Built once per scan rather than once per tick: the set is the same every minute, and
+            // a tick should allocate nothing.
+            clockViews = HashSet<ItemInfo>(found.size).apply {
+                addAll(found.placed)
+                addAll(found.apps)
+            }
             EdenLog.i(TAG, "watching ${found.size} clock icons")
             refreshClocks()
         }
@@ -704,8 +796,9 @@ class Launcher : Activity(), ItemPlacementHandler {
         clockTickJob?.cancel()
         clockTickJob = scope.launch {
             if (!appState.model.refreshClocks(clocks)) return@launch
-            if (clocks.placed.isNotEmpty()) refreshPlacedIcons()
-            if (clocks.apps.isNotEmpty()) allApps.refreshIcons()
+            // Only the clocks. Everything else on the screen looks exactly as it did a minute ago.
+            if (clocks.placed.isNotEmpty()) refreshPlacedIcons(clockViews)
+            if (clocks.apps.isNotEmpty()) allApps.refreshIcons(clockViews)
         }
     }
 
@@ -904,14 +997,22 @@ class Launcher : Activity(), ItemPlacementHandler {
         val appWidgetId = widgetHost.allocateAppWidgetId()
         pendingWidgetId = appWidgetId
 
-        if (WidgetBinding.bindIfAllowed(this, appWidgetId, provider)) {
+        // The span this widget will be placed at, worked out before the bind rather than after it.
+        // The provider builds its first views during the bind, and a provider that was not told
+        // how big it is builds them for the size in its manifest - see WidgetSizes.optionsFor.
+        val options = WidgetBinding.providerNamed(this, provider)?.let { info ->
+            val span = WidgetSizes.defaultSpan(info, currentDeviceProfile())
+            WidgetSizes.optionsFor(this, span[0], span[1])
+        }
+
+        if (WidgetBinding.bindIfAllowed(this, appWidgetId, provider, options)) {
             configureOrPlaceWidget(appWidgetId)
             return
         }
 
         try {
             startActivityForResult(
-                WidgetBinding.bindPermissionIntent(appWidgetId, provider),
+                WidgetBinding.bindPermissionIntent(appWidgetId, provider, options),
                 REQUEST_BIND_WIDGET,
             )
         } catch (e: ActivityNotFoundException) {
@@ -2437,6 +2538,12 @@ class Launcher : Activity(), ItemPlacementHandler {
         super.onStart()
         isStarted = true
         widgetHost.startListeningSafely()
+        // Only while the launcher is on screen. A dot that changed behind another app is a dot
+        // read again on the way back, and every one in between was a redraw of a hidden window.
+        NotificationDots.addListener(dotListener)
+        // The phone-wide switch can only have been changed while Eden was not in front.
+        NotificationDots.refreshSystemSetting(this)
+        refreshNotificationDots()
         startWatchingTime()
         // Whatever the clocks were showing, it was at least a minute ago.
         refreshClocks()
@@ -2444,6 +2551,7 @@ class Launcher : Activity(), ItemPlacementHandler {
 
     override fun onStop() {
         isStarted = false
+        NotificationDots.removeListener(dotListener)
         stopWatchingTime()
         clockTickJob?.cancel()
         widgetHost.stopListeningSafely()

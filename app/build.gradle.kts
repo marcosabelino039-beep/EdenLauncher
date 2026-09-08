@@ -24,8 +24,8 @@ android {
         applicationId = "app.auriel.edenlauncher"
         minSdk = 29
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.6.2"
+        versionCode = 10
+        versionName = "0.7.0"
 
         // Room schema export: keeps migration history reviewable in git.
         ksp {

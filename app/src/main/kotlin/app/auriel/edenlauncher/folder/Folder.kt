@@ -59,6 +59,18 @@ class Folder @JvmOverloads constructor(
     private val content: CellLayout
     private val tmpCell = IntArray(2)
 
+    /**
+     * Re-reads the notification dot on every icon inside.
+     *
+     * An open folder is the one place a dot can change while the icon showing it is not on the
+     * workspace, so the launcher's sweep has to reach in here rather than stopping at the tile.
+     */
+    fun refreshDots() {
+        for (i in 0 until content.childCount) {
+            (content.getChildAt(i) as? app.auriel.edenlauncher.views.BubbleTextView)?.refreshDot()
+        }
+    }
+
     var isOpen: Boolean = false
         private set
 

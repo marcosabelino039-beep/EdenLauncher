@@ -7,6 +7,7 @@ import androidx.recyclerview.widget.RecyclerView
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.model.AppInfo
+import app.auriel.edenlauncher.model.ItemInfo
 import app.auriel.edenlauncher.views.BubbleTextView
 
 /**
@@ -61,10 +62,18 @@ class AppDrawerVertical(context: Context) : AppDrawerView {
      * Only the attached views are touched. Everything else is off screen and will pick the new
      * bitmap up from its [AppInfo] the next time it is bound, which recycling guarantees.
      */
-    override fun refreshIcons() {
+    override fun refreshIcons(only: Set<ItemInfo>?) {
         for (i in 0 until recyclerView.childCount) {
             val icon = recyclerView.getChildAt(i) as? BubbleTextView ?: continue
-            (icon.itemInfo as? AppInfo)?.let { icon.setIconBitmap(it.icon) }
+            val info = icon.itemInfo as? AppInfo ?: continue
+            if (only != null && info !in only) continue
+            icon.setIconBitmap(info.icon)
+        }
+    }
+
+    override fun refreshDots() {
+        for (i in 0 until recyclerView.childCount) {
+            (recyclerView.getChildAt(i) as? BubbleTextView)?.refreshDot()
         }
     }
 

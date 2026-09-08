@@ -378,6 +378,32 @@
                 android:resource="@xml/wallpaper_polarclock" />
         </service>
 
+        <!--
+            Notification dots.
+
+            Declared whether or not the feature is on, because the user cannot grant access to a
+            component the system cannot see, and access is what turning the feature on asks for.
+            Declaring it grants nothing: BIND_NOTIFICATION_LISTENER_SERVICE is held by the system,
+            not by Eden, and it is what stops anything but the system binding this. Until the user
+            goes to the access screen and says yes, nothing here ever runs.
+
+            Turning dots off in Eden's settings calls requestUnbind, so the service stops being
+            bound rather than being bound and doing nothing. See NotificationDots.setEnabled.
+
+            Everything this service sees is reduced to a set of package names inside
+            EdenNotificationListener and nothing else leaves it. Nothing is stored, nothing is
+            logged, and Eden has no network code to send it anywhere even if it wanted to.
+        -->
+        <service
+            android:name=".notification.EdenNotificationListener"
+            android:exported="false"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <!-- Reads the accelerometer while it is drawing, and drops it the moment it is not. -->
         <service
             android:name=".wallpaper.live.WalkaroundWallpaperService"

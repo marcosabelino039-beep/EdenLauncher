@@ -2,6 +2,7 @@ package app.auriel.edenlauncher.allapps
 
 import android.view.View
 import app.auriel.edenlauncher.model.AppInfo
+import app.auriel.edenlauncher.model.ItemInfo
 
 /**
  * Contract shared by the two drawer styles.
@@ -22,13 +23,21 @@ interface AppDrawerView {
     fun resetScroll()
 
     /**
-     * Re-reads the icon off every entry currently on screen.
+     * Re-reads the icon off the entries currently on screen, or off [only] of them.
      *
      * Called while the icon pack is being applied over a drawer that is already built. Deliberately
      * not a resubmit: the list, the filter and the scroll position have not changed, only the
      * bitmaps, and rebuilding would throw away where the user was.
+     *
+     * [only] names the items whose bitmaps actually changed, and null means all of them. The
+     * distinction matters because of clock icons: those are redrawn once a minute, forever, and
+     * rebinding every icon in the drawer to update the one that moved is a minute-by-minute cost
+     * paid on behalf of a single app.
      */
-    fun refreshIcons()
+    fun refreshIcons(only: Set<ItemInfo>? = null)
+
+    /** Re-reads the notification dot on every entry currently on screen. */
+    fun refreshDots()
 
     /**
      * True when a further downward drag has nothing left to scroll.

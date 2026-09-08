@@ -9,16 +9,22 @@ import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
+import android.os.Parcelable
 import android.os.SystemClock
+import android.util.SparseArray
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.AdapterView
+import android.widget.Advanceable
 import android.widget.RemoteViews
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.util.EdenLog
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 private const val TAG = "WidgetHostView"
@@ -40,10 +46,17 @@ private const val TAG = "WidgetHostView"
  *    Deliberately *not* done with `requestDisallowInterceptTouchEvent`: that reaches every ancestor
  *    including the drag layer, which is where a long press is turned into a drag, so a widget that
  *    asked for it could never be picked up again.
- *  - **Corners.** Providers draw square backgrounds; the launcher rounds them. See [RoundedCorners].
+ *  - **Corners.** Providers draw square backgrounds; the launcher rounds them - unless the widget
+ *    rounded itself, in which case it is left exactly alone. See [RoundedCorners].
  *  - **Crashes and blank frames.** A provider's RemoteViews can throw during layout, and updates
  *    that arrive mid-drag cost frames exactly when they are most visible. Both are handled rather
  *    than allowed to reach the user as a launcher that stutters or dies.
+ *
+ * The rest of the contract a host owes a provider is smaller but not optional, and a provider that
+ * does not get it renders something - just not the something it meant. A widget with a flipper in
+ * it never turns over unless the host advances it; a widget told the wrong size picks the layout
+ * for a different one; a widget whose saved view state no longer matches its views takes the
+ * launcher down on the next rotation. All three are handled here.
  */
 class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
 
@@ -86,12 +99,25 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
     private val cornerRadius = RoundedCorners.radiusFor(context)
     private val cornerRect = Rect()
 
+    /**
+     * False when the widget rounds its own corners, or there is nothing to round.
+     *
+     * The two states are different clips, not one clip and no clip. Enforcing gives the widget's
+     * background rectangle the launcher's radius; not enforcing still clips, but to the plain
+     * bounds of the cell, so a provider that paints outside itself cannot spill onto the page.
+     */
+    private var enforceCorners = false
+
     private val cornerOutline = object : ViewOutlineProvider() {
         override fun getOutline(view: View, outline: Outline) {
-            if (cornerRect.isEmpty || cornerRadius <= 0f) {
-                outline.setEmpty()
-            } else {
+            if (enforceCorners && !cornerRect.isEmpty && cornerRadius > 0f) {
                 outline.setRoundRect(cornerRect, cornerRadius)
+            } else {
+                // Square, and transparent: this clips the widget to its cell and rounds nothing.
+                // Alpha zero because an outline with alpha casts a shadow, and a widget that
+                // draws its own background would get a second one under it.
+                outline.setRect(0, 0, view.width, view.height)
+                outline.alpha = 0f
             }
         }
     }
@@ -119,6 +145,14 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
         isLongClickable = true
         clipToOutline = true
         outlineProvider = cornerOutline
+
+        // Inflating a provider's RemoteViews off the main thread. The platform does the work on
+        // this executor and posts the finished views back, so a widget that arrives during a
+        // fling costs the launcher a callback rather than a frame. API 31 and up only; below
+        // that the platform has no way to be asked and inflation stays where it always was.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            setExecutor(INFLATION_EXECUTOR)
+        }
     }
 
     override fun setAppWidget(appWidgetId: Int, info: AppWidgetProviderInfo?) {
@@ -170,6 +204,9 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
         // and it must not become the launcher's crash.
         runCatching { super.updateAppWidget(remoteViews) }
             .onFailure { EdenLog.w(TAG, "provider views would not apply", it) }
+
+        // The views are new, so whatever was or was not advanceable in the old ones says nothing.
+        checkAutoAdvance()
     }
 
     // ---- layout ----------------------------------------------------------------------------------
@@ -183,7 +220,7 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
                 post { switchToErrorView() }
             }
 
-        hasScrollableContent = containsScrollable(this)
+        hasScrollableContent = taggedScrollable() || containsScrollable(this)
         applyCornerClip()
     }
 
@@ -194,19 +231,36 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
     }
 
     private fun applyCornerClip() {
-        if (cornerRadius <= 0f) {
-            cornerRect.setEmpty()
-            return
-        }
         val background = RoundedCorners.findBackground(this)
-        if (background == null) {
-            // The widget rounds itself. Clip to the plain bounds so nothing spills out of the
-            // cell, and let its own corners stand.
-            cornerRect.set(0, 0, width, height)
-        } else {
+        enforceCorners = cornerRadius > 0f &&
+            background != null &&
+            !RoundedCorners.hasOptedOut(background)
+
+        if (enforceCorners && background != null) {
             RoundedCorners.boundsIn(this, background, cornerRect)
+        } else {
+            // The widget rounds itself, or there is nothing identifiable to round. Either way the
+            // outline falls back to the plain bounds: it still stops the provider drawing outside
+            // its cell, and it takes nothing off the corners the widget drew for itself.
+            cornerRect.setEmpty()
         }
         invalidateOutline()
+    }
+
+    /**
+     * True when the provider said its views scroll without shipping a view that does.
+     *
+     * A `RemoteViews` built from draw instructions - which is how a generated preview and some
+     * Android 15 widgets arrive - has no child hierarchy to walk, so the platform tags the root
+     * with a layout id of zero instead. Without this the workspace reads a drag inside such a
+     * widget as the flick that opens the drawer.
+     */
+    private fun taggedScrollable(): Boolean {
+        for (i in 0 until childCount) {
+            val layoutId = getChildAt(i).getTag(android.R.id.widget_frame) as? Int ?: continue
+            return layoutId == 0
+        }
+        return false
     }
 
     private fun containsScrollable(group: ViewGroup): Boolean {
@@ -284,6 +338,85 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
     override fun onDetachedFromWindow() {
         removeCallbacks(longPressTrigger)
         super.onDetachedFromWindow()
+        attached = false
+        checkAutoAdvance()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        attached = true
+        checkAutoAdvance()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        checkAutoAdvance()
+    }
+
+    // ---- auto advance ----------------------------------------------------------------------------
+
+    private var attached = false
+    private var advancing = false
+    private val advanceRunnable = Runnable { runAdvance() }
+
+    /**
+     * The view a provider asked the host to turn over, or null.
+     *
+     * A widget with a stack or a flipper in it does not animate itself: the provider names the
+     * view in its `AppWidgetProviderInfo` and the *host* is expected to advance it on a timer.
+     * Nothing in the platform does this on a host's behalf, so a launcher that never implements
+     * it shows the first page of every such widget forever - which is not obviously a bug, and is
+     * exactly what it looks like when a news or photo widget "stopped working".
+     */
+    private val advanceable: Advanceable?
+        get() {
+            val info = appWidgetInfo ?: return null
+            if (info.autoAdvanceViewId == NO_ID || !attached) return null
+            return findViewById<View>(info.autoAdvanceViewId) as? Advanceable
+        }
+
+    private fun checkAutoAdvance() {
+        val target = advanceable
+        val shouldAdvance = target != null && windowVisibility == VISIBLE
+        if (shouldAdvance == advancing) return
+
+        advancing = shouldAdvance
+        removeCallbacks(advanceRunnable)
+        if (!shouldAdvance) return
+
+        // Tells the view to stop running its own animation, because the host owns the timing now.
+        // The platform really does spell it this way.
+        target?.fyiWillBeAdvancedByHostKThx()
+        scheduleAdvance()
+    }
+
+    private fun scheduleAdvance() {
+        if (!advancing) return
+        // Aligned to a shared interval and then staggered per widget, so a page holding several of
+        // these turns them over one at a time instead of doing every inflation on one frame.
+        val now = SystemClock.uptimeMillis()
+        val stagger = ADVANCE_STAGGER_MS * (appWidgetId and STAGGER_MASK)
+        postDelayed(advanceRunnable, ADVANCE_INTERVAL_MS - (now % ADVANCE_INTERVAL_MS) + stagger)
+    }
+
+    private fun runAdvance() {
+        runCatching { advanceable?.advance() }
+            .onFailure { EdenLog.w(TAG, "provider views would not advance", it) }
+        scheduleAdvance()
+    }
+
+    /**
+     * A widget's saved view state belongs to the views it was saved from.
+     *
+     * The provider can replace its whole layout between the state being written and being read
+     * back - an update, a different size, a different layout for the same size - and the platform
+     * then restores a `SparseArray` keyed by ids that now mean something else. That throws, inside
+     * the launcher's own recreation, so a rotation or a return from settings takes the home screen
+     * with it. Losing a widget's scroll position is the cheaper of the two outcomes.
+     */
+    override fun dispatchRestoreInstanceState(container: SparseArray<Parcelable>) {
+        runCatching { super.dispatchRestoreInstanceState(container) }
+            .onFailure { EdenLog.w(TAG, "provider views would not restore their state", it) }
     }
 
     private fun cancelChildTouches() {
@@ -343,5 +476,26 @@ class LauncherAppWidgetHostView(context: Context) : AppWidgetHostView(context) {
          * otherwise leave the widget frozen on its last frame for good.
          */
         const val DEFER_TIMEOUT_MS = 1000L
+
+        /** AOSP's own interval and stagger for advancing a widget the provider asked to be turned. */
+        const val ADVANCE_INTERVAL_MS = 20_000L
+        const val ADVANCE_STAGGER_MS = 250L
+
+        /** Keeps the stagger inside one interval however many widgets are on the page. */
+        const val STAGGER_MASK = 0x0F
+
+        /**
+         * Where a provider's RemoteViews are inflated on API 31 and up.
+         *
+         * Two threads, and daemon ones: inflation is bursty - a page of widgets at bind, nothing
+         * for minutes - and a pool that keeps the process alive waiting for more work is exactly
+         * the background cost this launcher exists to not have.
+         */
+        val INFLATION_EXECUTOR: Executor = Executors.newFixedThreadPool(2) { runnable ->
+            Thread(runnable, "eden-widget-inflate").apply {
+                isDaemon = true
+                priority = Thread.NORM_PRIORITY - 1
+            }
+        }
     }
 }

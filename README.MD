@@ -66,6 +66,16 @@ Eden gives that back. Every one of those is a setting, and the defaults are only
   preferences off, and no two OEM Settings apps agree on where they should live.
 - **An About screen** that says what you are running and who wrote it, with a link straight to the
   source.
+- **Notification dots**, off until you ask for them. A dot on an app that has something waiting, in
+  one of sixteen colours. It needs notification access, which is the widest permission Eden asks for
+  and the only one you have to grant by hand - so what arrives is reduced to a set of package names
+  inside the one file that sees it, and nothing is stored, logged, or sent. There is no network code
+  in the launcher to send it with. Android's own phone-wide dots switch and each channel's "show a
+  dot" setting are both honoured, so a dot never appears where you told the system it should not.
+
+- **Set in Open Sans**, with JetBrains Mono for the log - a screen of timestamps and stack traces
+  that only lines up when the characters are the same width.
+
 - **A log you can read on the device.** The last 48 hours of what Eden did, kept locally, thrown
   away after that, and shared only if you press Share.
 - **Widgets, hosted properly.** Every widget your phone provides, grouped by app, each one labelled
@@ -88,21 +98,19 @@ Eden gives that back. Every one of those is a setting, and the defaults are only
 - **Nothing is destroyed on one tap.** Deleting a page says how many things are on it and waits for
   an answer; an empty page still goes without ceremony.
 
-Coming next: notification dots.
+Coming next: a widget picker that previews what it is offering.
 
 ---
 
 ## What it looks like
 
-Every shot below is Eden 0.4.0 running on a Galaxy M31 (Android 16), captured off the device. The
-icons are themed by an icon pack the phone already had installed - nothing here is a mockup, and
-nothing was retouched.
+Captured off a real device, themed by an icon pack the phone already had installed. Nothing here is
+a mockup and nothing was retouched.
 
-> **These screenshots are out of date.** They are from 0.4.0 and Eden is now on 0.6.2. Three
-> releases of features are missing from them - widgets, widget stacks, simple mode, folders you can
-> take apps back out of, icon shapes, page reordering, backup and restore - and the launcher is a
-> good deal more stable than the one pictured.
-> Nothing shown here has been removed; there is simply more of it now. New shots are on the list.
+> The home screen, drawer, drawer search, icon settings and notification dot shots are from 0.7.0.
+> The rest are still from 0.4.0 - the screens have gained things since (widgets, widget stacks,
+> simple mode, page reordering, backup and restore) and lost nothing, so they under-sell rather
+> than mislead.
 
 ### Home screen
 
@@ -140,6 +148,19 @@ gesture.</sub></td>
 <td><sub>Search matches anywhere in the name, not just the start - and always against the app's real
 name, so a rename can never hide it.</sub></td>
 <td><sub>Long-press anything for the same menu, on the home screen or in the drawer.</sub></td>
+</tr>
+</table>
+
+### Notification dots
+
+<table>
+<tr>
+<td width="25%"><img src="art/screenshots/22-notification-dots.jpg" alt="Notification dot settings"></td>
+<td width="75%"><sub>Off until you turn it on, because it needs notification access - the widest
+permission Eden asks for and the only one granted by hand. What the service sees is reduced to a
+set of package names before it leaves the file it arrives in; nothing is stored, nothing is logged,
+and there is no network code in the app to send it anywhere. The colour is one of sixteen, laid out
+as a palette rather than hidden behind a colour wheel.</sub></td>
 </tr>
 </table>
 
@@ -229,9 +250,12 @@ Share.</sub></td>
 | **4** | Icons - icon packs, per-app icons, wallpaper cropping, live app list, on-device log | **Done** |
 | **5** | Widgets - `AppWidgetHost`, the bind flow, the picker, resize frames - plus simple mode | **Done** |
 | **6** | Icon shapes, page reorder by dragging cards, the About screen | **Done** |
-| 7 | Notification dots | Next |
+| **7** | Notification dots, Google widget interoperability, Open Sans and JetBrains Mono | **Done** |
+| 8 | A widget picker that previews what it is offering | Next |
 
-Running on a Galaxy M31 (Android 16, API 36). Release APK is about 872 KB, with no native code.
+Running on a Galaxy M31 (Android 16, API 36), and reported working on a Motorola on the same.
+Release APK is about 1.2 MB with no native code; it grew from 872 KB in 0.6.2, and the three
+bundled font files are all of that.
 
 ---
 

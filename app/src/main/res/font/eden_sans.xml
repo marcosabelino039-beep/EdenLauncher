@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Open Sans, the face everything in Eden that is words is set in.
+
+    Two weights and no italic. A launcher's text is app names, section headings and short
+    explanations - it never sets a paragraph, never emphasises a clause, and every face that ships
+    is a face on every install of a launcher that is trying to stay small. Regular carries the
+    labels; semibold carries the headings, and is a real cut rather than the fake bold the platform
+    synthesises by smearing the regular one sideways.
+
+    Declared as a family rather than referenced file by file so that `textStyle="bold"` picks the
+    right one on its own, wherever it is set - including from inside the platform's own widgets,
+    which Eden does not get to edit.
+-->
+<font-family xmlns:android="http://schemas.android.com/apk/res/android">
+    <font
+        android:font="@font/open_sans_regular"
+        android:fontStyle="normal"
+        android:fontWeight="400" />
+    <font
+        android:font="@font/open_sans_semibold"
+        android:fontStyle="normal"
+        android:fontWeight="600" />
+</font-family>

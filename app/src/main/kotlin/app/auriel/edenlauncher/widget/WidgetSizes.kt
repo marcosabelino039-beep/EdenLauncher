@@ -1,6 +1,7 @@
 package app.auriel.edenlauncher.widget
 
 import android.appwidget.AppWidgetHostView
+import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
 import android.os.Build
@@ -125,6 +126,58 @@ object WidgetSizes {
                 max(portraitH, landscapeH).toInt(),
             )
         }
+    }
+
+    /**
+     * The options a widget should be bound with, for a widget that will occupy [spanX] x [spanY].
+     *
+     * A bind with no options is a bind that tells the provider nothing, and the provider still has
+     * to produce views: it falls back to the size it declared in its manifest, which is a minimum
+     * and not a measurement. Everything built to lay itself out by size then picks the layout for
+     * the wrong one, and the widget's *first* frame - the one the user sees at the moment they add
+     * it, and judges it by - is the wrong frame. Google's own widgets are the clearest case,
+     * because they ship the most layouts to choose between.
+     *
+     * The same four numbers the platform has always taken, plus the exact list on API 31 and up:
+     * a provider that understands `OPTION_APPWIDGET_SIZES` gets one entry per orientation and can
+     * map a layout onto each, and one that does not still reads the min/max box those two sizes
+     * describe. Passed to `bindAppWidgetIdIfAllowed`, so it is in place before the provider is
+     * ever asked for views, rather than corrected afterwards by an update it has to redraw for.
+     */
+    fun optionsFor(context: Context, spanX: Int, spanY: Int): android.os.Bundle {
+        val idp = LauncherAppState.getInstance(context).invariantDeviceProfile
+        val sizes = ArrayList<SizeF>(2)
+        for (landscape in booleanArrayOf(false, true)) {
+            val profile = idp.profileFor(landscape)
+            sizes.add(
+                SizeF(
+                    toDp(context, spanX * profile.cellWidthPx),
+                    toDp(context, spanY * profile.cellHeightPx),
+                ),
+            )
+        }
+
+        val options = android.os.Bundle()
+        options.putInt(
+            AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
+            sizes.minOf { it.width }.toInt(),
+        )
+        options.putInt(
+            AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT,
+            sizes.minOf { it.height }.toInt(),
+        )
+        options.putInt(
+            AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH,
+            sizes.maxOf { it.width }.toInt(),
+        )
+        options.putInt(
+            AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,
+            sizes.maxOf { it.height }.toInt(),
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            options.putParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES, sizes)
+        }
+        return options
     }
 
     /**

@@ -27,6 +27,8 @@ import app.auriel.edenlauncher.backup.BackupException
 import app.auriel.edenlauncher.backup.LauncherBackup
 import app.auriel.edenlauncher.icons.IconPacks
 import app.auriel.edenlauncher.icons.IconShape
+import app.auriel.edenlauncher.notification.DotColour
+import app.auriel.edenlauncher.notification.NotificationDots
 import app.auriel.edenlauncher.util.EdenLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,6 +55,17 @@ class SettingsActivity : Activity() {
     private var iconPackRow: View? = null
 
     /**
+     * The two rows under the dots toggle whose text depends on something outside this screen.
+     *
+     * Held for the same reason [iconPackRow] is. Turning dots on changes what the warning under
+     * the toggle says, and coming back from the system's access screen changes what the button
+     * says - and rebuilding the settings screen to say it would throw the user back to the top of
+     * a long page, having just scrolled most of the way down it.
+     */
+    private var notificationWarnings: LinearLayout? = null
+    private var notificationAccess: android.widget.Button? = null
+
+    /**
      * Scope for the backup reads and writes, cancelled in [onDestroy].
      *
      * Hand-rolled for the same reason the launcher's is: one `CoroutineScope` is all a lifecycle
@@ -65,6 +78,16 @@ class SettingsActivity : Activity() {
         prefs = LauncherPrefs(this)
         setContentView(buildContentView())
         title = getString(R.string.settings_title)
+    }
+
+    /**
+     * Notification access is granted on a screen that is not this one, so the only moment it can
+     * have changed is while this activity was in the background.
+     */
+    override fun onResume() {
+        super.onResume()
+        NotificationDots.setEnabled(this, prefs.notificationDots)
+        refreshNotificationRows()
     }
 
     override fun onDestroy() {
@@ -149,6 +172,18 @@ class SettingsActivity : Activity() {
         column.addView(folderTapOutsideToggle(), spacedParams(spacing))
 
         column.addView(rotationToggle(), spacedParams(spacing))
+
+        column.addView(
+            header(getString(R.string.settings_section_notifications)),
+            spacedParams(spacing * 2),
+        )
+        column.addView(notificationDotsToggle(), spacedParams(spacing))
+        column.addView(notificationAccessRow(), spacedParams(spacing))
+        column.addView(summary(getString(R.string.settings_notification_access_summary)))
+
+        column.addView(label(getString(R.string.settings_dot_colour)), spacedParams(spacing))
+        column.addView(dotColourGrid())
+        column.addView(summary(getString(R.string.settings_dot_colour_summary)))
 
         column.addView(header(getString(R.string.settings_section_icons)), spacedParams(spacing * 2))
 
@@ -371,6 +406,165 @@ class SettingsActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             addView(toggle)
             addView(summary(getString(R.string.settings_drawer_remember_position_summary)))
+        }
+    }
+
+    /**
+     * Whether apps with something waiting get a dot.
+     *
+     * Turning it on when access has not been granted does not refuse and does not silently do
+     * nothing: the setting is kept, and the access screen is opened, because the user has said
+     * what they want and the only thing left is the grant. If they come back without granting it,
+     * the row below says so rather than leaving them with a switch that is on and a home screen
+     * that never changes.
+     */
+    private fun notificationDotsToggle(): View {
+        val toggle = android.widget.CheckBox(this).apply {
+            text = getString(R.string.settings_notification_dots)
+            setTextColor(getColor(R.color.settings_text))
+            textSize = 16f
+            isChecked = prefs.notificationDots
+            setOnCheckedChangeListener { _, checked ->
+                prefs.notificationDots = checked
+                NotificationDots.setEnabled(this@SettingsActivity, checked)
+                if (checked && !NotificationDots.accessGranted(this@SettingsActivity)) {
+                    openNotificationAccess()
+                }
+                refreshNotificationRows()
+            }
+        }
+        val warnings = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        notificationWarnings = warnings
+        fillWarnings(warnings)
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(toggle)
+            addView(summary(getString(R.string.settings_notification_dots_summary)))
+            addView(warnings)
+        }
+    }
+
+    /** Puts the access button and the warnings back in step with the world outside this screen. */
+    private fun refreshNotificationRows() {
+        notificationAccess?.setText(notificationAccessLabel())
+        notificationWarnings?.let { warnings ->
+            warnings.removeAllViews()
+            fillWarnings(warnings)
+        }
+    }
+
+    /**
+     * Says what is standing between the setting and a dot on the screen.
+     *
+     * Both warnings are about switches that are not Eden's: the grant, and Android's own
+     * phone-wide dots setting. Neither can be changed from here, and a launcher that just drew
+     * nothing would be a launcher that looked broken to somebody who had already turned the
+     * feature on.
+     */
+    private fun fillWarnings(column: LinearLayout) {
+        if (!prefs.notificationDots) return
+        if (!NotificationDots.accessGranted(this)) {
+            column.addView(summary(getString(R.string.settings_notification_access_needed)))
+        } else if (!NotificationDots.systemBadgingEnabled(this)) {
+            column.addView(summary(getString(R.string.settings_notification_dots_system_off)))
+        }
+    }
+
+    private fun notificationAccessRow(): View {
+        val row = actionRow(getString(notificationAccessLabel())) { openNotificationAccess() }
+        notificationAccess = row as? android.widget.Button
+        return row
+    }
+
+    private fun notificationAccessLabel(): Int = if (NotificationDots.accessGranted(this)) {
+        R.string.settings_notification_access_granted
+    } else {
+        R.string.settings_notification_access
+    }
+
+    private fun openNotificationAccess() {
+        try {
+            startActivity(NotificationDots.accessSettingsIntent(this))
+        } catch (e: ActivityNotFoundException) {
+            EdenLog.w(TAG, "no notification access screen on this device", e)
+            toast(getString(R.string.activity_not_found))
+        }
+    }
+
+    /**
+     * The sixteen colours, as swatches rather than a list of names.
+     *
+     * A dropdown reading "Magenta" is a word to imagine a colour from; a grid of the colours
+     * themselves is the choice being made directly, and sixteen of them fit in two rows on the
+     * narrowest phone this project supports. Eight per row rather than four rows of four so the
+     * whole palette reads as one block at a glance.
+     *
+     * Rebuilt in place on a tap - the only thing that changes is which swatch is ringed, and the
+     * page is a long way down by the time anyone reaches this.
+     */
+    private fun dotColourGrid(): View {
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val swatches = ArrayList<DotSwatchView>(DotColour.entries.size)
+
+        var row = newSwatchRow()
+        for ((index, colour) in DotColour.entries.withIndex()) {
+            if (index > 0 && index % SWATCHES_PER_ROW == 0) {
+                grid.addView(row)
+                row = newSwatchRow()
+            }
+
+            val swatch = DotSwatchView(this, colour).apply {
+                chosen = colour == prefs.notificationDotColour
+                contentDescription = getString(colour.labelRes)
+                setOnClickListener {
+                    prefs.notificationDotColour = colour
+                    // Exactly one is ringed, so the others are told rather than asked.
+                    for (other in swatches) {
+                        other.chosen = other.colour == colour
+                        other.invalidate()
+                    }
+                }
+            }
+            swatches.add(swatch)
+
+            val size = resources.getDimensionPixelSize(R.dimen.dot_swatch_size)
+            val gap = resources.getDimensionPixelSize(R.dimen.dot_swatch_gap)
+            row.addView(
+                swatch,
+                LinearLayout.LayoutParams(size, size).apply { marginEnd = gap; topMargin = gap },
+            )
+        }
+        grid.addView(row)
+        return grid
+    }
+
+    private fun newSwatchRow(): LinearLayout =
+        LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+
+    /** One colour, ringed when it is the chosen one. */
+    private class DotSwatchView(context: Context, val colour: DotColour) : View(context) {
+
+        // Named `chosen` rather than `selected`: View already has a `setSelected`, and shadowing
+        // it here would override the platform's own pressed/selected state handling.
+        var chosen = false
+
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getColor(colour.colourRes)
+        }
+
+        private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = context.getColor(R.color.settings_text)
+            style = Paint.Style.STROKE
+            strokeWidth = 2f * context.resources.displayMetrics.density
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val centre = width / 2f
+            // The ring sits outside the swatch, so choosing black does not leave an empty square.
+            val radius = centre - ring.strokeWidth * 2f
+            canvas.drawCircle(centre, centre, radius, fill)
+            if (chosen) canvas.drawCircle(centre, centre, centre - ring.strokeWidth, ring)
         }
     }
 
@@ -1079,6 +1273,9 @@ class SettingsActivity : Activity() {
 
     private companion object {
         const val TAG = "SettingsActivity"
+
+        /** Sixteen colours in two rows; eight is what fits across the narrowest supported phone. */
+        const val SWATCHES_PER_ROW = 8
 
         const val ID_VERTICAL = 1
         const val ID_HORIZONTAL = 2

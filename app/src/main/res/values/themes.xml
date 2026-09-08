@@ -18,6 +18,14 @@
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:textViewStyle">@style/Eden.TextView</item>
+        <item name="android:editTextStyle">@style/Eden.EditText</item>
+        <item name="android:buttonStyle">@style/Eden.Button</item>
+        <item name="android:checkboxStyle">@style/Eden.CheckBox</item>
+        <item name="android:radioButtonStyle">@style/Eden.RadioButton</item>
+        <!-- Dialogs and menus are inflated by the platform against these two. -->
+        <item name="android:fontFamily">@font/eden_sans</item>
+        <item name="android:textAppearance">@android:style/TextAppearance.Material</item>
     </style>
 
     <!-- Ordinary opaque activity theme for the settings screen. -->
@@ -26,5 +34,46 @@
         <item name="android:statusBarColor">@color/settings_background</item>
         <item name="android:navigationBarColor">@color/settings_background</item>
         <item name="android:colorAccent">@color/accent</item>
+        <item name="android:textViewStyle">@style/Eden.TextView</item>
+        <item name="android:editTextStyle">@style/Eden.EditText</item>
+        <item name="android:buttonStyle">@style/Eden.Button</item>
+        <item name="android:checkboxStyle">@style/Eden.CheckBox</item>
+        <item name="android:radioButtonStyle">@style/Eden.RadioButton</item>
+        <!-- Dialogs and menus are inflated by the platform against these two. -->
+        <item name="android:fontFamily">@font/eden_sans</item>
+        <item name="android:textAppearance">@android:style/TextAppearance.Material</item>
+    </style>
+
+    <!--
+        Eden's type, reaching views the launcher never writes down.
+
+        Almost every view in this project is built in Kotlin rather than inflated, so there is no
+        layout file to put a fontFamily in. Overriding the *default style attributes* is what
+        catches them anyway: `TextView(context)` resolves `android:textViewStyle` from the theme,
+        `EditText` resolves `editTextStyle`, and so on down the list. One line per widget kind here
+        is worth a `setTypeface` call at several dozen construction sites, and it cannot be
+        forgotten at the next one.
+
+        Setting `android:fontFamily` on the theme itself does not do this. It is read by
+        `TextAppearance`, which a bare programmatic widget never consults.
+    -->
+    <style name="Eden.TextView" parent="@android:style/Widget.Material.TextView">
+        <item name="android:fontFamily">@font/eden_sans</item>
+    </style>
+
+    <style name="Eden.EditText" parent="@android:style/Widget.Material.EditText">
+        <item name="android:fontFamily">@font/eden_sans</item>
+    </style>
+
+    <style name="Eden.Button" parent="@android:style/Widget.Material.Button">
+        <item name="android:fontFamily">@font/eden_sans</item>
+    </style>
+
+    <style name="Eden.CheckBox" parent="@android:style/Widget.Material.CompoundButton.CheckBox">
+        <item name="android:fontFamily">@font/eden_sans</item>
+    </style>
+
+    <style name="Eden.RadioButton" parent="@android:style/Widget.Material.CompoundButton.RadioButton">
+        <item name="android:fontFamily">@font/eden_sans</item>
     </style>
 </resources>
