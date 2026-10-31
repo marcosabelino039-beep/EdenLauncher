@@ -41,6 +41,9 @@ enum class IconShape {
     /** A true superellipse: flat sides that turn late. What One UI puts on a Samsung. */
     SQUIRCLE,
 
+    /** ColorOS-inspired soft superellipse, with fuller corners than the standard squircle. */
+    COLOROS,
+
     /** The iOS icon outline: rounder than [SQUIRCLE], and smoother into the corner. */
     APPLE,
 
@@ -90,6 +93,7 @@ enum class IconShape {
             }
 
             SQUIRCLE -> superellipse(size, SQUIRCLE_EXPONENT, into)
+            COLOROS -> superellipse(size, COLOROS_EXPONENT, into)
             APPLE -> continuousRoundedRect(size, into)
             TEARDROP -> teardrop(size, bounds, into)
             LEAF -> leaf(size, bounds, into)
@@ -310,6 +314,9 @@ enum class IconShape {
          * visual weight.
          */
         private const val SQUIRCLE_EXPONENT = 4f
+
+        /** Softer, more rounded-square profile for the ColorOS-inspired icon treatment. */
+        private const val COLOROS_EXPONENT = 5.2f
 
         /** Apple's corner radius, as a fraction of the icon's width. */
         private const val APPLE_RADIUS = 0.2237f
