@@ -3,12 +3,18 @@ package app.auriel.edenlauncher.folder
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
 import android.util.AttributeSet
 import android.view.Gravity
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import app.auriel.edenlauncher.LauncherAppState
 import app.auriel.edenlauncher.R
@@ -58,6 +64,8 @@ class Folder @JvmOverloads constructor(
     private val titleView: EditText
     private val content: CellLayout
     private val tmpCell = IntArray(2)
+    private var blurOverlay: ImageView? = null
+    private var blurBitmap: Bitmap? = null
 
     /**
      * Re-reads the notification dot on every icon inside.
@@ -176,6 +184,7 @@ class Folder @JvmOverloads constructor(
         rebuildContents()
 
         if (parent == null) {
+            addFolderBlur(dragLayer)
             val lp = InsettableFrameLayout.LayoutParams(
                 LayoutParams.WRAP_CONTENT,
                 LayoutParams.WRAP_CONTENT,
@@ -210,11 +219,64 @@ class Folder @JvmOverloads constructor(
             .withEndAction {
                 visibility = GONE
                 (parent as? DragLayer)?.removeView(this)
+                removeFolderBlur()
                 folderInfo?.removeListener(this)
                 folderInfo = null
                 onClosed?.invoke()
             }
             .start()
+    }
+
+    /**
+     * Captures the workspace before the folder is attached, then blurs that snapshot.
+     * RenderEffect is available on Android 12+; older devices keep the translucent panel fallback.
+     * A quarter-resolution bitmap keeps the effect inexpensive on mid-range hardware.
+     */
+    private fun addFolderBlur(dragLayer: DragLayer) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || dragLayer.width <= 0 || dragLayer.height <= 0) return
+
+        val bitmapWidth = (dragLayer.width / BLUR_DOWNSAMPLE).coerceAtLeast(1)
+        val bitmapHeight = (dragLayer.height / BLUR_DOWNSAMPLE).coerceAtLeast(1)
+        val snapshot = runCatching {
+            Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888).also { bitmap ->
+                Canvas(bitmap).apply {
+                    scale(1f / BLUR_DOWNSAMPLE, 1f / BLUR_DOWNSAMPLE)
+                    dragLayer.draw(this)
+                }
+            }
+        }.getOrNull() ?: return
+
+        val overlay = ImageView(context).apply {
+            setImageBitmap(snapshot)
+            scaleType = ImageView.ScaleType.FIT_XY
+            isClickable = false
+            isFocusable = false
+            setRenderEffect(
+                RenderEffect.createBlurEffect(BLUR_RADIUS_PX, BLUR_RADIUS_PX, Shader.TileMode.CLAMP),
+            )
+            setBackgroundColor(Color.argb(34, 8, 14, 20))
+        }
+        blurBitmap = snapshot
+        blurOverlay = overlay
+        dragLayer.addView(
+            overlay,
+            0,
+            InsettableFrameLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                LayoutParams.MATCH_PARENT,
+            ),
+        )
+    }
+
+    private fun removeFolderBlur() {
+        blurOverlay?.let { overlay ->
+            (overlay.parent as? DragLayer)?.removeView(overlay)
+            overlay.setImageDrawable(null)
+            overlay.setRenderEffect(null)
+        }
+        blurOverlay = null
+        blurBitmap?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+        blurBitmap = null
     }
 
     private fun commitTitle() {
