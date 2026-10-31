@@ -1149,6 +1149,7 @@ class SettingsActivity : Activity() {
         IconShape.SQUARE -> R.string.icon_shape_square
         IconShape.ROUNDED_SQUARE -> R.string.icon_shape_rounded_square
         IconShape.SQUIRCLE -> R.string.icon_shape_squircle
+        IconShape.COLOROS -> R.string.icon_shape_coloros
         IconShape.APPLE -> R.string.icon_shape_apple
         IconShape.TEARDROP -> R.string.icon_shape_teardrop
         IconShape.LEAF -> R.string.icon_shape_leaf
