@@ -1,120 +1,85 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Eden palette: soft pastel greens on a deep, desaturated green-black.
-
-    Surfaces stay dark because everything in the launcher floats over the user's wallpaper, and a
-    pale panel would fight it. The pastels carry the identity: accents, the icon mark, and text.
--->
 <resources>
-    <!-- Pastels -->
-    <color name="eden_mint">#A8E6C1</color>
-    <color name="eden_sage">#C7E9D2</color>
-    <color name="eden_leaf">#7FE7A5</color>
-    <color name="eden_moss">#5FBF88</color>
-    <color name="eden_deep">#1F7A4C</color>
+    <!-- ColorOS 16-inspired neutral surfaces and luminous blue accent. -->
+    <color name="eden_mint">#DCEBFF</color>
+    <color name="eden_sage">#C6DCFA</color>
+    <color name="eden_leaf">#3987F7</color>
+    <color name="eden_moss">#286FD6</color>
+    <color name="eden_deep">#174FA8</color>
 
-    <!-- Surfaces -->
-    <color name="eden_surface">#121A16</color>
-    <color name="eden_surface_raised">#1B241E</color>
-    <color name="eden_surface_scrim">#0E1611</color>
+    <color name="eden_surface">#F3F5F8</color>
+    <color name="eden_surface_raised">#FFFFFF</color>
+    <color name="eden_surface_scrim">#660C1422</color>
 
-    <!-- Roles -->
-    <color name="accent">@color/eden_leaf</color>
-    <color name="settings_background">@color/eden_surface</color>
-    <color name="settings_text">#EAF6EE</color>
-    <color name="settings_text_secondary">#A9C4B5</color>
+    <color name="accent">#3987F7</color>
+    <color name="settings_background">#F4F5F7</color>
+    <color name="settings_text">#17191D</color>
+    <color name="settings_text_secondary">#737A85</color>
 
-    <color name="ic_launcher_background">#10261B</color>
+    <color name="ic_launcher_background">#EAF2FF</color>
 
-    <color name="workspace_scrim">#66000000</color>
-    <color name="workspace_icon_text">#F2FBF6</color>
-    <color name="workspace_icon_text_shadow">#B3000000</color>
+    <color name="workspace_scrim">#33000000</color>
+    <color name="workspace_icon_text">#FFFFFFFF</color>
+    <color name="workspace_icon_text_shadow">#99000000</color>
 
-    <!--
-        The notification dot, and the ring that keeps it visible on top of an icon that happens to
-        be the same green. Deliberately the brightest colour in the palette: it is the one thing on
-        the home screen whose entire job is to be noticed.
-    -->
     <color name="notification_dot_ring_dark">#CC000000</color>
     <color name="notification_dot_ring_light">#CCFFFFFF</color>
 
-    <!--
-        The sixteen a dot may be. See DotColour for why there are sixteen and why they look like
-        this: a four-bit palette, chosen to be told apart rather than to go together, because a dot
-        that harmonises with the icon underneath it is a dot nobody notices.
-
-        Green is Eden's own and is the default. The rest are the palette's, kept at full
-        saturation - a muted version of one of these reads as a smudge on the artwork.
-    -->
-    <color name="dot_green">@color/eden_leaf</color>
-    <color name="dot_lime">#A8E000</color>
-    <color name="dot_yellow">#FFE000</color>
-    <color name="dot_orange">#FF8C1A</color>
-    <color name="dot_red">#F03028</color>
-    <color name="dot_maroon">#A01820</color>
-    <color name="dot_magenta">#FF3CC0</color>
-    <color name="dot_purple">#A050E8</color>
-    <color name="dot_navy">#2440C8</color>
-    <color name="dot_blue">#3C94FF</color>
-    <color name="dot_cyan">#3CE0E0</color>
-    <color name="dot_teal">#00B49A</color>
-    <color name="dot_brown">#9C6432</color>
+    <color name="dot_green">#35B86B</color>
+    <color name="dot_lime">#A8D938</color>
+    <color name="dot_yellow">#F4C542</color>
+    <color name="dot_orange">#F28A38</color>
+    <color name="dot_red">#E94B55</color>
+    <color name="dot_maroon">#A52C45</color>
+    <color name="dot_magenta">#D84BAA</color>
+    <color name="dot_purple">#8958D8</color>
+    <color name="dot_navy">#344DA8</color>
+    <color name="dot_blue">#3987F7</color>
+    <color name="dot_cyan">#35B8D1</color>
+    <color name="dot_teal">#20A995</color>
+    <color name="dot_brown">#98704F</color>
     <color name="dot_white">#FFFFFF</color>
-    <color name="dot_grey">#9AA5A0</color>
-    <color name="dot_black">#101414</color>
+    <color name="dot_grey">#8D96A3</color>
+    <color name="dot_black">#17191D</color>
 
-    <color name="options_sheet_background">#F01B241E</color>
-    <color name="folder_background">#EB1B241E</color>
-    <color name="folder_preview_background">#A6C7E9D2</color>
+    <color name="options_sheet_background">#F5FFFFFF</color>
+    <color name="folder_background">#EFFFFFFF</color>
+    <color name="folder_preview_background">#DCE5F0</color>
 
-    <color name="all_apps_background">#0E1611</color>
-    <color name="all_apps_hint">#8CA9C4B5</color>
+    <color name="all_apps_background">#EAF1F8</color>
+    <color name="all_apps_hint">#66717F</color>
 
-    <color name="widget_placeholder_fill">#661B241E</color>
+    <color name="widget_placeholder_fill">#33FFFFFF</color>
+    <color name="widget_resize_border">#CC3987F7</color>
+    <color name="widget_resize_handle">#FF3987F7</color>
+    <color name="widget_stack_dot_idle">#FF3987F7</color>
+    <color name="widget_picker_row">#F0F3F7</color>
 
-    <!-- Resize handles: bright enough to find on any wallpaper a widget might be sitting on. -->
-    <color name="widget_resize_border">#CCA8E6C1</color>
-    <color name="widget_resize_handle">#FF7FE7A5</color>
-    <!-- The dots down the edge of a widget stack: legible on any wallpaper, quiet when not the
-         one you are on. -->
-    <color name="widget_stack_dot_idle">#FFC7E9D2</color>
-    <color name="widget_picker_row">#16211B</color>
+    <color name="overview_card_fill">#D9FFFFFF</color>
+    <color name="overview_card_stroke">#663987F7</color>
+    <color name="overview_badge_idle">#E6FFFFFF</color>
+    <color name="overview_panel_background">#F2F4F7</color>
 
-    <color name="overview_card_fill">#591B241E</color>
-    <color name="overview_card_stroke">#66A8E6C1</color>
-    <color name="overview_badge_idle">#D9121A16</color>
-    <color name="overview_panel_background">#F0121A16</color>
+    <color name="wallpaper_tile_empty">#E8EDF4</color>
+    <color name="wallpaper_tile_stroke">#663987F7</color>
+    <color name="wallpaper_tile_scrim">#B30C1422</color>
 
-    <color name="wallpaper_tile_empty">#1B241E</color>
-    <color name="wallpaper_tile_stroke">#4DA8E6C1</color>
-    <color name="wallpaper_tile_scrim">#B30E1611</color>
+    <color name="wallpaper_crop_scrim">#B30C1422</color>
+    <color name="wallpaper_crop_border">#CC3987F7</color>
 
-    <!-- Crop screen: dark enough that the cut-away reads as cut away, light enough to still see. -->
-    <color name="wallpaper_crop_scrim">#B3060A08</color>
-    <color name="wallpaper_crop_border">#CCA8E6C1</color>
+    <color name="settings_control_surface">#FFFFFFFF</color>
+    <color name="settings_control_stroke">#333987F7</color>
 
-    <!-- Settings dropdowns: an accented outline, so a control does not read as a heading. -->
-    <color name="settings_control_surface">#141D18</color>
-    <color name="settings_control_stroke">#66A8E6C1</color>
+    <color name="icon_picker_tile">#FFFFFFFF</color>
+    <color name="icon_options_background">#F7FFFFFF</color>
+    <color name="icon_options_stroke">#333987F7</color>
 
-    <!-- Icon browser tiles. -->
-    <color name="icon_picker_tile">#16211B</color>
+    <color name="drop_preview_fill">#333987F7</color>
+    <color name="drop_preview_stroke">#993987F7</color>
+    <color name="drop_preview_folder_fill">#3D3987F7</color>
+    <color name="drop_preview_folder_stroke">#CC3987F7</color>
 
-    <color name="icon_options_background">#F51B241E</color>
-    <color name="icon_options_stroke">#4DA8E6C1</color>
-
-    <!--
-        The cell a dragged icon would land in. Faint on purpose: it sits under the wallpaper's
-        worth of contrast and has to read as a hint, not as a second icon.
-    -->
-    <color name="drop_preview_fill">#33A8E6C1</color>
-    <color name="drop_preview_stroke">#99A8E6C1</color>
-    <!-- Landing on another icon makes a folder rather than taking the cell, so it is marked apart. -->
-    <color name="drop_preview_folder_fill">#3D7FE7A5</color>
-    <color name="drop_preview_folder_stroke">#CC7FE7A5</color>
-
-    <color name="drop_target_idle">#A0121A16</color>
+    <color name="drop_target_idle">#E6FFFFFF</color>
     <color name="drop_target_active">#DCE05A5A</color>
-    <!-- Uninstall is the irreversible one, so it is the more alarming red of the two. -->
     <color name="drop_target_uninstall">#E6C42B2B</color>
 </resources>
