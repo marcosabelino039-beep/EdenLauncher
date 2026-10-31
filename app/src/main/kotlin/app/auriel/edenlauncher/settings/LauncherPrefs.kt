@@ -265,7 +265,7 @@ class LauncherPrefs(context: Context) {
      * correct rather than preferred - it is what the icon's author drew for.
      */
     var iconShape: IconShape
-        get() = IconShape.fromName(prefs.getString(KEY_ICON_SHAPE, null))
+        get() = IconShape.fromName(prefs.getString(KEY_ICON_SHAPE, IconShape.COLOROS.name))
         set(value) = prefs.edit().putString(KEY_ICON_SHAPE, value.name).apply()
 
     /**
