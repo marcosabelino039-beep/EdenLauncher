@@ -378,5 +378,7 @@ class Folder @JvmOverloads constructor(
         const val OPEN_START_SCALE = 0.85f
         const val OPEN_DURATION_MS = 160L
         const val CLOSE_DURATION_MS = 120L
+        const val BLUR_DOWNSAMPLE = 4
+        const val BLUR_RADIUS_PX = 4f
     }
 }
