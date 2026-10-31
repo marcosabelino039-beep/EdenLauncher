@@ -465,7 +465,7 @@ class LauncherPrefs(context: Context) {
         private const val KEY_VISUALIZER_REAL_AUDIO = "visualizer_real_audio"
         private const val KEY_TITLE_OVERRIDE_PREFIX = "app_title."
 
-        private const val DEFAULT_DRAWER_OPACITY = 92
+        private const val DEFAULT_DRAWER_OPACITY = 76
         private const val DEFAULT_ICON_SIZE_PERCENT = 100
         private const val DEFAULT_ICON_PAD_VERTICAL = 10
         private const val DEFAULT_ICON_PAD_HORIZONTAL = 4
