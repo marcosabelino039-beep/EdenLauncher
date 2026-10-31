@@ -3,6 +3,11 @@ package app.auriel.edenlauncher.allapps
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -18,11 +23,14 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ImageView
 import app.auriel.edenlauncher.R
 import app.auriel.edenlauncher.model.AppInfo
 import app.auriel.edenlauncher.model.ItemInfo
 import app.auriel.edenlauncher.settings.AppDrawerMode
 import app.auriel.edenlauncher.views.Insettable
+import app.auriel.edenlauncher.views.DragLayer
+import app.auriel.edenlauncher.views.InsettableFrameLayout
 import app.auriel.edenlauncher.views.PageIndicatorDots
 import android.graphics.Rect
 
@@ -86,6 +94,8 @@ class AllAppsContainerView @JvmOverloads constructor(
 
     /** Obtained from the platform pool on the gesture that might become a pull, and given back. */
     private var velocityTracker: VelocityTracker? = null
+    private var drawerBlurOverlay: ImageView? = null
+    private var drawerBlurBitmap: Bitmap? = null
 
     init {
         orientation = VERTICAL
@@ -361,6 +371,7 @@ class AllAppsContainerView @JvmOverloads constructor(
         if (isOpen) return
         isOpen = true
         pulling = false
+        addDrawerBlur()
         releaseTracker()
         animate().cancel()
         visibility = VISIBLE
@@ -421,12 +432,62 @@ class AllAppsContainerView @JvmOverloads constructor(
             .setDuration(CLOSE_DURATION_MS)
             .withEndAction {
                 visibility = GONE
+                removeDrawerBlur()
                 // Reset transforms so the next opening always starts from the same geometry.
                 translationY = 0f
                 scaleX = 1f
                 scaleY = 1f
             }
             .start()
+    }
+
+    /** Captures and blurs the workspace behind the drawer on Android 12+. */
+    private fun addDrawerBlur() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val dragLayer = parent as? DragLayer ?: return
+        if (dragLayer.width <= 0 || dragLayer.height <= 0) return
+        val width = (dragLayer.width / DRAWER_BLUR_DOWNSAMPLE).coerceAtLeast(1)
+        val height = (dragLayer.height / DRAWER_BLUR_DOWNSAMPLE).coerceAtLeast(1)
+        val snapshot = runCatching {
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+                Canvas(bitmap).apply {
+                    scale(1f / DRAWER_BLUR_DOWNSAMPLE, 1f / DRAWER_BLUR_DOWNSAMPLE)
+                    dragLayer.draw(this)
+                }
+            }
+        }.getOrNull() ?: return
+        val overlay = ImageView(context).apply {
+            setImageBitmap(snapshot)
+            scaleType = ImageView.ScaleType.FIT_XY
+            isClickable = false
+            isFocusable = false
+            setRenderEffect(
+                RenderEffect.createBlurEffect(DRAWER_BLUR_RADIUS, DRAWER_BLUR_RADIUS, Shader.TileMode.CLAMP),
+            )
+            setBackgroundColor(Color.argb(28, 8, 14, 20))
+        }
+        drawerBlurBitmap = snapshot
+        drawerBlurOverlay = overlay
+        val drawerIndex = dragLayer.indexOfChild(this).coerceAtLeast(0)
+        dragLayer.addView(
+            overlay,
+            drawerIndex,
+            InsettableFrameLayout.LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                LayoutParams.MATCH_PARENT,
+            ),
+        )
+    }
+
+    private fun removeDrawerBlur() {
+        drawerBlurOverlay?.let { overlay ->
+            (overlay.parent as? DragLayer)?.removeView(overlay)
+            overlay.setImageDrawable(null)
+            overlay.setRenderEffect(null)
+        }
+        drawerBlurOverlay = null
+        drawerBlurBitmap?.let { if (!it.isRecycled) it.recycle() }
+        drawerBlurBitmap = null
     }
 
     private fun hideKeyboard() {
@@ -443,6 +504,8 @@ class AllAppsContainerView @JvmOverloads constructor(
         const val DRAWER_START_SCALE = 0.965f
         const val DRAWER_CLOSE_SCALE = 0.975f
         const val DRAWER_PIVOT_Y = 0.88f
+        const val DRAWER_BLUR_DOWNSAMPLE = 4
+        const val DRAWER_BLUR_RADIUS = 5f
 
         /** How much of the finger's travel the drawer follows. Below 1 it feels held. */
         const val PULL_RESISTANCE = 0.55f
