@@ -12,6 +12,7 @@ import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.animation.PathInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
@@ -361,10 +362,22 @@ class AllAppsContainerView @JvmOverloads constructor(
         isOpen = true
         pulling = false
         releaseTracker()
+        animate().cancel()
         visibility = VISIBLE
+        pivotX = width / 2f
+        pivotY = height * DRAWER_PIVOT_Y
         alpha = 0f
+        scaleX = DRAWER_START_SCALE
+        scaleY = DRAWER_START_SCALE
         translationY = height * OPEN_TRANSLATION_RATIO
-        animate().alpha(1f).translationY(0f).setDuration(OPEN_DURATION_MS).start()
+        animate()
+            .alpha(1f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .translationY(0f)
+            .setInterpolator(PathInterpolator(0.2f, 0.8f, 0.2f, 1f))
+            .setDuration(OPEN_DURATION_MS)
+            .start()
         if (!rememberPosition) drawerView?.resetScroll()
         if (openKeyboardOnOpen) showKeyboard()
     }
@@ -398,14 +411,20 @@ class AllAppsContainerView @JvmOverloads constructor(
         // Never less than where the drawer already is: closing after a pull that went further than
         // the closing offset would otherwise animate the panel back up before it disappeared.
         val target = maxOf(translationY, height * OPEN_TRANSLATION_RATIO)
+        animate().cancel()
         animate()
             .alpha(0f)
+            .scaleX(DRAWER_CLOSE_SCALE)
+            .scaleY(DRAWER_CLOSE_SCALE)
             .translationY(target)
+            .setInterpolator(PathInterpolator(0.4f, 0f, 1f, 1f))
             .setDuration(CLOSE_DURATION_MS)
             .withEndAction {
                 visibility = GONE
-                // Put back for the next open, which sets its own start position.
+                // Reset transforms so the next opening always starts from the same geometry.
                 translationY = 0f
+                scaleX = 1f
+                scaleY = 1f
             }
             .start()
     }
@@ -421,6 +440,9 @@ class AllAppsContainerView @JvmOverloads constructor(
         const val OPEN_DURATION_MS = 180L
         const val CLOSE_DURATION_MS = 140L
         const val OPEN_TRANSLATION_RATIO = 0.12f
+        const val DRAWER_START_SCALE = 0.965f
+        const val DRAWER_CLOSE_SCALE = 0.975f
+        const val DRAWER_PIVOT_Y = 0.88f
 
         /** How much of the finger's travel the drawer follows. Below 1 it feels held. */
         const val PULL_RESISTANCE = 0.55f
